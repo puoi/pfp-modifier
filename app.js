@@ -139,7 +139,10 @@ let replChain = Promise.resolve();
 function addRepls(files) {
   for (const file of files) {
     if (!isImage(file)) continue;
-    const r = { id: nid('r'), file, name: file.name, thumb: null, src: null, face: null, useFace: false, ready: false, error: null };
+    const r = {
+      id: nid('r'), file, name: file.name, thumb: null, preview: null, src: null, face: null,
+      crop: null, cropEdited: false, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
+    };
     state.repls.push(r);
     replChain = replChain.then(() => prepareRepl(r));
   }
@@ -152,9 +155,11 @@ async function prepareRepl(r) {
     r.src = fitCanvas(img, img.naturalWidth, img.naturalHeight, 1024);
     freeImage(img);
     r.thumb = coverThumb(r.src, 200);
+    r.crop = defaultCrop(r, 'auto');
     r.ready = true;
+    updatePreview(r);
     renderRepls(); renderGroups();
-    // Si l'image contient un visage, on cadre dessus (désactivable).
+    // Si l'image contient un visage, le cadrage par défaut se fait dessus.
     try {
       await loadModels();
       const dets = await faceapi.detectAllFaces(r.src, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks();
@@ -162,7 +167,7 @@ async function prepareRepl(r) {
         const d = dets.reduce((a, b) => (a.detection.box.area > b.detection.box.area ? a : b));
         const b = d.detection.box;
         r.face = { cx: b.x + b.width / 2, cy: b.y + b.height / 2, size: Math.max(b.width, b.height), angle: eyeAngle(d.landmarks) };
-        r.useFace = true;
+        if (!r.cropEdited) { r.crop = defaultCrop(r, 'auto'); r.rev++; }
       }
       if (!state.busy) setStatus('');
     } catch (e) { /* pas grave : centrage simple */ }
@@ -170,7 +175,23 @@ async function prepareRepl(r) {
     r.error = 'Illisible';
   }
   r.patch = null;
+  if (r.ready) updatePreview(r);
   renderRepls(); renderGroups(); scheduleRender();
+}
+// 'auto' = visage s'il y en a un, sinon carré central ; 'face' ; 'full' = image entière visible
+function defaultCrop(r, kind) {
+  const w = r.src.width, h = r.src.height;
+  if ((kind === 'auto' || kind === 'face') && r.face) {
+    return { cx: r.face.cx, cy: r.face.cy, size: r.face.size * 1.6, angle: r.face.angle };
+  }
+  return { cx: w / 2, cy: h / 2, size: kind === 'full' ? Math.max(w, h) : Math.min(w, h), angle: 0 };
+}
+function updatePreview(r) {
+  const p = getPatch(r, false);
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  c.getContext('2d').drawImage(p, 0, 0, 160, 160);
+  r.preview = c.toDataURL('image/png');
 }
 function removeRepl(id) {
   state.repls = state.repls.filter((r) => r.id !== id);
@@ -354,32 +375,58 @@ function mergeGroups(intoId, fromId) {
 }
 
 /* ---------- Rendu ---------- */
-function getPatch(r) {
-  const scale = state.settings.scale;
-  const key = r.useFace && r.face ? 'f' + scale : 'c';
+const replSource = (r) => (r.bg.mode !== 'none' && r.cut ? r.cut : r.src);
+// Dessine le cadrage d'une image de remplacement dans un carré de N px.
+function drawCrop(ctx, src, crop, N) {
+  ctx.save();
+  ctx.translate(N / 2, N / 2);
+  ctx.scale(N / crop.size, N / crop.size);
+  ctx.rotate(-crop.angle);
+  ctx.drawImage(src, -crop.cx, -crop.cy);
+  ctx.restore();
+}
+// sticker = contour blanc qui suit la silhouette détourée
+function getPatch(r, sticker) {
+  const key = `${r.rev}|${sticker ? 1 : 0}`;
   if (r.patch && r.patchKey === key) return r.patch;
   const N = 768;
-  const c = document.createElement('canvas');
-  c.width = c.height = N;
-  const ctx = c.getContext('2d');
-  if (r.useFace && r.face) {
-    const s = r.face.size * scale;
-    ctx.translate(N / 2, N / 2);
-    ctx.scale(N / s, N / s);
-    ctx.rotate(-r.face.angle);
-    ctx.drawImage(r.src, -r.face.cx, -r.face.cy);
-  } else {
-    const s = Math.min(r.src.width, r.src.height);
-    ctx.drawImage(r.src, (r.src.width - s) / 2, (r.src.height - s) / 2, s, s, 0, 0, N, N);
+  const base = document.createElement('canvas');
+  base.width = base.height = N;
+  drawCrop(base.getContext('2d'), replSource(r), r.crop, N);
+  let c = base;
+  if (sticker) {
+    const sil = document.createElement('canvas');
+    sil.width = sil.height = N;
+    const sctx = sil.getContext('2d');
+    sctx.drawImage(base, 0, 0);
+    sctx.globalCompositeOperation = 'source-in';
+    sctx.fillStyle = '#fff';
+    sctx.fillRect(0, 0, N, N);
+    c = document.createElement('canvas');
+    c.width = c.height = N;
+    const ctx = c.getContext('2d');
+    const lw = N * 0.025;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      ctx.drawImage(sil, Math.cos(a) * lw, Math.sin(a) * lw);
+    }
+    // garde seulement l'anneau extérieur, pour que le blanc ne transparaisse pas à travers l'image
+    ctx.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 4; i++) ctx.drawImage(sil, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(base, 0, 0);
   }
   r.patch = c; r.patchKey = key;
   return c;
 }
 function shapePath(ctx, shape, s) {
-  const h = s / 2;
   ctx.beginPath();
-  if (shape === 'circle') ctx.arc(0, 0, h, 0, Math.PI * 2);
-  else if (shape === 'ellipse') ctx.ellipse(0, 0, h * 0.84, h, 0, 0, Math.PI * 2);
+  addShape(ctx, shape, s);
+}
+function addShape(ctx, shape, s) {
+  const h = s / 2;
+  if (shape === 'circle') { ctx.moveTo(h, 0); ctx.arc(0, 0, h, 0, Math.PI * 2); }
+  else if (shape === 'ellipse') { ctx.moveTo(h * 0.84, 0); ctx.ellipse(0, 0, h * 0.84, h, 0, 0, Math.PI * 2); }
   else if (shape === 'rounded') {
     const rr = s * 0.22;
     ctx.moveTo(-h + rr, -h);
@@ -397,7 +444,7 @@ function photoSig(p) {
   const st = state.settings;
   const parts = state.faces.filter((f) => f.photoId === p.id).map((f) => {
     const r = replFor(f);
-    return r ? `${f.id}:${r.id}:${r.useFace ? 1 : 0}` : '';
+    return r ? `${f.id}:${r.id}:${r.rev}` : '';
   }).filter(Boolean);
   if (!parts.length) return '';
   return `${st.shape}|${st.scale}|${st.rotate}|${st.outline}|${parts.join(',')}`;
@@ -413,20 +460,31 @@ async function renderPhoto(p, full) {
     if (f.photoId !== p.id) continue;
     const r = replFor(f);
     if (!r) continue;
-    const patch = getPatch(r);
+    const free = st.shape === 'none';
+    const cutout = r.bg.mode !== 'none' && r.cut;
+    const patch = getPatch(r, free && st.outline && cutout);
     const s = Math.max(f.box.w, f.box.h) * st.scale * k;
     ctx.save();
     ctx.translate((f.box.x + f.box.w / 2) * k, (f.box.y + f.box.h / 2) * k);
     if (st.rotate) ctx.rotate(f.angle);
-    shapePath(ctx, st.shape, s);
-    ctx.save();
-    ctx.clip();
-    ctx.drawImage(patch, -s / 2, -s / 2, s, s);
-    ctx.restore();
-    if (st.outline) {
-      ctx.lineWidth = Math.max(2, s * 0.03);
-      ctx.strokeStyle = '#fff';
-      ctx.stroke();
+    if (free) {
+      ctx.drawImage(patch, -s / 2, -s / 2, s, s);
+      if (st.outline && !cutout) {
+        ctx.lineWidth = Math.max(2, s * 0.03);
+        ctx.strokeStyle = '#fff';
+        ctx.strokeRect(-s / 2, -s / 2, s, s);
+      }
+    } else {
+      shapePath(ctx, st.shape, s);
+      ctx.save();
+      ctx.clip();
+      ctx.drawImage(patch, -s / 2, -s / 2, s, s);
+      ctx.restore();
+      if (st.outline) {
+        ctx.lineWidth = Math.max(2, s * 0.03);
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -548,6 +606,202 @@ function closeViewer() {
   $('#viewer-img').removeAttribute('src');
 }
 
+/* ---------- Éditeur de cadrage / détourage ---------- */
+const ed = { r: null, crop: null, bg: null, cut: null, cuts: new Map(), pointers: new Map(), token: 0 };
+const BG_LABELS = { auto: 'Détourage du sujet…', flat: 'Retrait du fond uni…' };
+const sizeBounds = (r) => { const m = Math.max(r.src.width, r.src.height); return [m * 0.04, m * 3]; };
+
+function openEditor(id) {
+  const r = state.repls.find((x) => x.id === id);
+  if (!r || !r.ready) return;
+  ed.r = r;
+  ed.crop = { ...r.crop };
+  ed.bg = { ...r.bg };
+  ed.cut = r.cut;
+  ed.cuts = new Map();
+  if (r.cut) ed.cuts.set(cutKey(r.bg), r.cut);
+  ed.pointers.clear();
+  $('#ed-name').textContent = r.name;
+  $('#ed-face').hidden = !r.face;
+  $('#ed-tol').value = ed.bg.tol;
+  $('#editor').hidden = false;
+  document.body.style.overflow = 'hidden';
+  syncEditorControls();
+  requestAnimationFrame(drawEditor);
+}
+function closeEditor() {
+  ed.token++;
+  $('#editor').hidden = true;
+  document.body.style.overflow = '';
+  ed.r = null; ed.cuts = new Map();
+}
+const cutKey = (bg) => (bg.mode === 'flat' ? 'flat' + bg.tol : bg.mode);
+
+function syncEditorControls() {
+  const r = ed.r;
+  const [mn, mx] = sizeBounds(r);
+  const v = Math.log(ed.crop.size / mx) / Math.log(mn / mx);
+  $('#ed-zoom').value = v;
+  $('#ed-zoom-out').textContent = Math.round((r.src.width / ed.crop.size) * 100) + ' %';
+  let deg = Math.round((ed.crop.angle * 180) / Math.PI);
+  deg = ((deg + 540) % 360) - 180;
+  $('#ed-rot').value = deg;
+  $('#ed-rot-out').textContent = deg + '°';
+  $('#ed-bgmode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.bg.mode));
+  $('#ed-tol-row').hidden = ed.bg.mode !== 'flat';
+  $('#ed-tol-out').textContent = ed.bg.tol;
+}
+
+function drawEditor() {
+  if (!ed.r) return;
+  const cv = $('#ed-canvas');
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const css = cv.clientWidth;
+  if (!css) return;
+  const C = Math.round(css * dpr);
+  if (cv.width !== C) { cv.width = C; cv.height = C; }
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, C, C);
+  const F = C * 0.72;
+  const src = ed.bg.mode !== 'none' && ed.cut ? ed.cut : ed.r.src;
+  ctx.save();
+  ctx.translate((C - F) / 2, (C - F) / 2);
+  drawCrop(ctx, src, ed.crop, F);
+  ctx.restore();
+  // voile en dehors de la forme choisie à l'étape 3
+  const shape = state.settings.shape === 'none' ? 'square' : state.settings.shape;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, C, C);
+  ctx.translate(C / 2, C / 2);
+  addShape(ctx, shape, F);
+  ctx.fillStyle = 'rgba(14, 16, 24, 0.58)';
+  ctx.fill('evenodd');
+  ctx.beginPath();
+  addShape(ctx, shape, F);
+  ctx.lineWidth = 2 * dpr;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+  if (state.settings.shape === 'none') ctx.setLineDash([8 * dpr, 6 * dpr]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function clampSize() {
+  const [mn, mx] = sizeBounds(ed.r);
+  ed.crop.size = Math.min(mx, Math.max(mn, ed.crop.size));
+}
+// déplacement en pixels écran → déplacement du centre de cadrage dans l'image
+function panBy(dx, dy) {
+  const cv = $('#ed-canvas');
+  const F = cv.clientWidth * 0.72;
+  const s = F / ed.crop.size, a = ed.crop.angle;
+  ed.crop.cx -= (dx * Math.cos(a) - dy * Math.sin(a)) / s;
+  ed.crop.cy -= (dx * Math.sin(a) + dy * Math.cos(a)) / s;
+}
+
+async function setEditorBg(mode, tol) {
+  ed.bg = { mode, tol: tol ?? ed.bg.tol };
+  syncEditorControls();
+  if (mode === 'none') { ed.cut = null; $('#ed-status').textContent = ''; drawEditor(); return; }
+  const key = cutKey(ed.bg);
+  if (ed.cuts.has(key)) { ed.cut = ed.cuts.get(key); drawEditor(); return; }
+  const token = ++ed.token;
+  const r = ed.r;
+  $('#ed-status').textContent = BG_LABELS[mode] + (mode !== 'flat' ? ' (le premier usage charge le modèle)' : '');
+  $('#ed-ok').disabled = true;
+  try {
+    await nextFrame();
+    const cut = await BG.cut(r.src, mode, ed.bg.tol);
+    if (token !== ed.token || ed.r !== r) return;
+    ed.cuts.set(key, cut);
+    ed.cut = cut;
+    $('#ed-status').textContent = '';
+  } catch (err) {
+    console.error(err);
+    if (token !== ed.token) return;
+    $('#ed-status').textContent = 'Détourage impossible : ' + err.message;
+    ed.bg.mode = 'none'; ed.cut = null;
+    syncEditorControls();
+  } finally {
+    if (token === ed.token) $('#ed-ok').disabled = false;
+  }
+  drawEditor();
+}
+
+function applyEditor() {
+  const r = ed.r;
+  if (!r) return;
+  r.crop = { ...ed.crop };
+  r.cropEdited = true;
+  r.bg = { ...ed.bg };
+  r.cut = ed.bg.mode !== 'none' ? ed.cut : null;
+  r.rev++;
+  r.patch = null;
+  updatePreview(r);
+  closeEditor();
+  renderRepls(); renderGroups(); scheduleRender();
+}
+
+(function wireEditor() {
+  const cv = $('#ed-canvas');
+  cv.addEventListener('pointerdown', (e) => {
+    cv.setPointerCapture(e.pointerId);
+    ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!ed.r || !ed.pointers.has(e.pointerId)) return;
+    const before = [...ed.pointers.values()].map((p) => ({ ...p }));
+    ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const after = [...ed.pointers.values()];
+    if (after.length === 1) {
+      panBy(after[0].x - before[0].x, after[0].y - before[0].y);
+    } else if (after.length >= 2) {
+      const [a0, b0] = before, [a1, b1] = after;
+      const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y), d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+      const t0 = Math.atan2(b0.y - a0.y, b0.x - a0.x), t1 = Math.atan2(b1.y - a1.y, b1.x - a1.x);
+      panBy((a1.x + b1.x - a0.x - b0.x) / 2, (a1.y + b1.y - a0.y - b0.y) / 2);
+      if (d0 > 0 && d1 > 0) ed.crop.size *= d0 / d1;
+      ed.crop.angle -= t1 - t0;
+      clampSize();
+    }
+    syncEditorControls();
+    drawEditor();
+  });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => ed.pointers.delete(e.pointerId)));
+  cv.addEventListener('wheel', (e) => {
+    if (!ed.r) return;
+    e.preventDefault();
+    ed.crop.size *= Math.exp(e.deltaY * 0.0015);
+    clampSize(); syncEditorControls(); drawEditor();
+  }, { passive: false });
+
+  $('#ed-zoom').addEventListener('input', (e) => {
+    const [mn, mx] = sizeBounds(ed.r);
+    ed.crop.size = mx * Math.pow(mn / mx, +e.target.value);
+    syncEditorControls(); drawEditor();
+  });
+  $('#ed-rot').addEventListener('input', (e) => {
+    ed.crop.angle = (+e.target.value * Math.PI) / 180;
+    syncEditorControls(); drawEditor();
+  });
+  $('#ed-face').addEventListener('click', () => { ed.crop = defaultCrop(ed.r, 'face'); syncEditorControls(); drawEditor(); });
+  $('#ed-full').addEventListener('click', () => { ed.crop = defaultCrop(ed.r, 'full'); syncEditorControls(); drawEditor(); });
+  $('#ed-center').addEventListener('click', () => { ed.crop = defaultCrop(ed.r, 'center'); syncEditorControls(); drawEditor(); });
+  $('#ed-bgmode').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (b && ed.r) setEditorBg(b.dataset.v);
+  });
+  let tolTimer = null;
+  $('#ed-tol').addEventListener('input', (e) => {
+    $('#ed-tol-out').textContent = e.target.value;
+    clearTimeout(tolTimer);
+    tolTimer = setTimeout(() => setEditorBg('flat', +e.target.value), 200);
+  });
+  $('#ed-cancel').addEventListener('click', closeEditor);
+  $('#ed-ok').addEventListener('click', applyEditor);
+  window.addEventListener('resize', () => { if (ed.r) drawEditor(); });
+})();
+
 /* ---------- UI ---------- */
 function setStatus(msg, pct) {
   const s = $('#status');
@@ -596,18 +850,16 @@ function renderRepls() {
   box.replaceChildren(...state.repls.map((r) => {
     let tag = null;
     if (r.error) tag = el('span', { class: 'tag err', text: r.error });
-    else if (r.face) tag = el('button', {
-      class: 'tag ' + (r.useFace ? 'face-on' : 'face-off'),
-      title: 'Cadrer sur le visage détecté dans cette image',
-      text: r.useFace ? 'cadré visage' : 'image entière',
-      onclick: () => { r.useFace = !r.useFace; r.patch = null; renderRepls(); scheduleRender(); },
-    });
-    return el('div', { class: 'thumb' + (r.ready ? '' : ' pending'), title: r.name },
-      r.thumb ? el('img', { src: r.thumb, alt: r.name }) : null,
+    else if (r.bg.mode !== 'none') tag = el('span', { class: 'tag face-on', text: 'sans fond' });
+    return el('div', { class: 'thumb repl' + (r.ready ? '' : ' pending'), title: r.name },
+      el('button', { class: 'open', 'aria-label': 'Ajuster ' + r.name, disabled: !r.ready, onclick: () => openEditor(r.id) },
+        r.preview || r.thumb ? el('img', { src: r.preview || r.thumb, alt: r.name }) : null),
+      r.ready && !r.error ? el('span', { class: 'edit-hint', text: 'Ajuster' }) : null,
       tag,
       el('button', { class: 'x', 'aria-label': 'Retirer ' + r.name, text: '×', onclick: () => removeRepl(r.id) }));
   }));
   $('#repl-count').textContent = state.repls.length ? String(state.repls.length) : '';
+  $('#repl-hint').hidden = !state.repls.some((r) => r.ready);
 }
 
 function faceButton(f) {
@@ -651,10 +903,11 @@ function renderGroups() {
       state.repls.length
         ? el('div', { class: 'repl-row' },
             el('button', { class: 'repl-opt' + (!g.replId ? ' on' : ''), text: 'Aucun', onclick: () => { g.replId = null; renderGroups(); scheduleRender(); } }),
-            state.repls.filter((r) => r.thumb).map((r) => el('button', {
+            state.repls.filter((r) => r.preview || r.thumb).map((r) => el('button', {
               class: 'repl-opt' + (g.replId === r.id ? ' on' : ''), title: r.name, 'aria-label': 'Remplacer par ' + r.name,
               onclick: () => { g.replId = r.id; renderGroups(); scheduleRender(); },
-            }, el('img', { src: r.thumb, alt: '' }))))
+            }, el('img', { src: r.preview || r.thumb, alt: '' }))),
+            g.replId ? el('button', { class: 'btn small adjust', text: 'Ajuster l\'image', onclick: () => openEditor(g.replId) }) : null)
         : el('span', { class: 'lbl', text: '— ajoute d\'abord des images de remplacement (étape 1)' }));
     cards.push(el('div', { class: 'group' + (g.replId ? ' has-repl' : '') }, head, el('div', { class: 'faces' }, faces.map(faceButton)), pick));
   }
@@ -747,7 +1000,11 @@ $('#viewer-close').addEventListener('click', closeViewer);
 $('#viewer-save').addEventListener('click', async () => {
   if (viewer.fullFile) await deliver([viewer.fullFile]);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#viewer').hidden) closeViewer(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!$('#editor').hidden) closeEditor();
+  else if (!$('#viewer').hidden) closeViewer();
+});
 const showOrig = (on) => {
   const p = viewer.photo;
   if (!p) return;

@@ -2,7 +2,8 @@
 
 Remplace les visages d'une même personne, sur toutes tes photos, par l'image de ton choix.
 Tout tourne dans le navigateur : aucune image n'est envoyée sur internet
-(détection et reconnaissance faciales : face-api / TensorFlow.js, modèles dans `models/`).
+(détection et reconnaissance faciales : face-api / TensorFlow.js ; détourage : U²-Netp via onnxruntime-web ;
+modèles dans `models/`).
 
 ## Lancer sur l'ordinateur
 
@@ -16,7 +17,7 @@ sur `index.html`, le navigateur refuse de charger les modèles.
 
 iOS n'exécute pas une page web ouverte depuis un fichier local. L'app s'installe donc comme une
 PWA : on la charge **une seule fois** depuis une adresse HTTPS, et ensuite tout (code + modèles,
-≈14 Mo) est stocké sur l'iPhone. Elle marche alors en mode avion, sans aucun serveur.
+≈30 Mo) est stocké sur l'iPhone. Elle marche alors en mode avion, sans aucun serveur.
 
 1. Héberge ce dossier une fois en HTTPS (GitHub Pages, Netlify, Cloudflare Pages… : ce sont des fichiers statiques).
 2. Ouvre l'adresse dans Safari sur l'iPhone et attends la mention « disponible hors ligne » en haut.
@@ -41,14 +42,20 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
 ## Utilisation
 
 1. **Les images** : les photos à modifier, puis les images de remplacement. Si une image de
-   remplacement contient un visage, elle est cadrée dessus. Touche l'étiquette pour utiliser l'image entière.
+   remplacement contient un visage, elle est cadrée dessus par défaut.
+   Touche une image de remplacement (ou « Ajuster l'image » dans une personne) pour :
+   - **recadrer** : glisser pour déplacer, pincer / molette / curseur pour zoomer, deux doigts ou curseur pour tourner ;
+     raccourcis « Centrer sur le visage », « Carré central », « Image entière » ;
+   - **retirer l'arrière-plan** : « auto » (IA U²-Net, sujet principal : personne, animal, objet)
+     ou « fond uni » (logos, fonds d'une seule couleur, avec un curseur de tolérance).
 2. **Les personnes** : « Détecter les visages ». Les visages sont regroupés par personne (deux visages
    d'une même photo ne sont jamais mis ensemble).
    - Touche des visages pour les sélectionner, puis « Nouvelle personne », « Déplacer vers… » ou « Ignorer ».
    - « Fusionner avec… » réunit deux personnes.
    - Le curseur « Regroupement » puis « Regrouper à nouveau » refait tout le regroupement (les corrections manuelles sont perdues).
    - Choisis l'image de remplacement de chaque personne.
-3. **Le rendu** : forme (ovale, rond, carré arrondi, carré), taille, inclinaison, contour.
+3. **Le rendu** : forme (ovale, rond, carré arrondi, carré, ou « Libre » sans découpe, idéal avec une image détourée),
+   taille, inclinaison, contour (avec « Libre » + image détourée, le contour suit la silhouette, façon sticker).
 4. **Résultats** : aperçus en direct, export en pleine résolution.
 
 Des photos ajoutées plus tard sont rattachées aux personnes existantes sans perdre tes corrections.

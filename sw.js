@@ -1,11 +1,16 @@
 /* Service worker : met toute l'app en cache pour qu'elle marche hors ligne. */
-const VERSION = 'pfp-v1';
+const VERSION = 'pfp-v2';
 const FILES = [
   './',
   'index.html',
   'app.js',
+  'bg.js',
   'manifest.webmanifest',
   'vendor/face-api.js',
+  'vendor/ort/ort.wasm.min.js',
+  'vendor/ort/ort-wasm-simd-threaded.mjs',
+  'vendor/ort/ort-wasm-simd-threaded.wasm',
+  'models/bg/u2netp.onnx',
   'icons/icon-180.png',
   'icons/icon-192.png',
   'icons/icon-512.png',

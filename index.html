@@ -198,6 +198,37 @@ progress::-moz-progress-bar { background: var(--accent); }
 .viewer .bar .btn.primary { background: #fff; color: #141729; border-color: #fff; }
 .viewer .note { color: rgba(255,255,255,.7); font-size: 12px; text-align: center; flex-basis: 100%; margin: 0; }
 footer.foot { color: var(--muted); font-size: 12px; }
+
+/* images de remplacement : damier = transparence */
+.checker, .thumb.repl, .repl-opt, .ed-canvas {
+  background-color: var(--sunken);
+  background-image: linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%),
+                    linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%);
+  background-size: 14px 14px; background-position: 0 0, 7px 7px;
+}
+.thumb .open { all: unset; display: block; width: 100%; height: 100%; cursor: pointer; }
+.thumb .open:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.thumb .edit-hint {
+  position: absolute; left: 4px; top: 4px; padding: 2px 6px; border-radius: 6px; pointer-events: none;
+  background: var(--scrim); color: #fff; font-size: 11px; line-height: 1.4;
+}
+.pane-hint { margin: 0; font-size: 12px; color: var(--muted); }
+.repl-row .adjust { align-self: center; margin-left: 4px; }
+
+.editor { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; place-items: center; overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
+.ed-panel { width: 100%; max-width: 540px; background: var(--surface); border-radius: 18px; padding: 16px; display: grid; gap: 12px; }
+.ed-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ed-head h3 { margin: 0; font: 600 19px/1.2 var(--font-display); }
+.ed-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.ed-canvas { display: block; width: min(100%, 52vh); aspect-ratio: 1; margin: 0 auto; border-radius: 12px; touch-action: none; cursor: grab; max-width: 100%; }
+.ed-canvas:active { cursor: grabbing; }
+.ed-tip { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }
+.ed-bg { display: grid; gap: 8px; }
+.ed-bg .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.ed-bg .seg button { font-size: 13px; padding: 7px 11px; }
+.ed-status { font-size: 13px; color: var(--accent); min-height: 1.2em; }
+.ed-actions { display: flex; justify-content: flex-end; gap: 8px; }
 </style>
 </head>
 <body>
@@ -225,6 +256,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
           <input type="file" id="in-repls" accept="image/*" multiple>
           <span><strong>Choisir des images</strong> (photo de profil, logo, emoji…)</span>
         </label>
+        <p class="pane-hint" id="repl-hint" hidden>Touche une image pour ajuster son cadrage ou retirer son arrière-plan.</p>
         <div class="thumbs" id="repls"></div>
       </div>
     </div>
@@ -261,6 +293,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
         <button data-v="circle">Rond</button>
         <button data-v="rounded">Carré arrondi</button>
         <button data-v="square">Carré</button>
+        <button data-v="none" title="Pas de découpe : idéal avec une image détourée">Libre</button>
       </div>
       <div class="range-row">
         <label for="scale">Taille</label>
@@ -306,7 +339,52 @@ footer.foot { color: var(--muted); font-size: 12px; }
   </div>
 </div>
 
+<div class="editor" id="editor" hidden role="dialog" aria-modal="true" aria-labelledby="ed-title">
+  <div class="ed-panel">
+    <div class="ed-head">
+      <h3 id="ed-title">Ajuster l'image</h3>
+      <span class="ed-name" id="ed-name"></span>
+    </div>
+    <canvas id="ed-canvas" class="ed-canvas" aria-label="Cadrage : glisser pour déplacer, pincer ou molette pour zoomer, deux doigts pour tourner"></canvas>
+    <p class="ed-tip">Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La forme affichée est celle de l'étape 3.</p>
+    <div class="range-row">
+      <label for="ed-zoom">Zoom</label>
+      <input type="range" id="ed-zoom" min="0" max="1" step="0.001" value="0.5">
+      <output id="ed-zoom-out"></output>
+    </div>
+    <div class="range-row">
+      <label for="ed-rot">Rotation</label>
+      <input type="range" id="ed-rot" min="-180" max="180" step="1" value="0">
+      <output id="ed-rot-out"></output>
+    </div>
+    <div class="toolbar">
+      <button class="btn small" id="ed-face">Centrer sur le visage</button>
+      <button class="btn small" id="ed-center">Carré central</button>
+      <button class="btn small" id="ed-full">Image entière</button>
+    </div>
+    <div class="ed-bg">
+      <span class="lbl">Arrière-plan</span>
+      <div class="seg" id="ed-bgmode" role="group" aria-label="Arrière-plan">
+        <button data-v="none">Garder</button>
+        <button data-v="auto">Retirer (auto)</button>
+        <button data-v="flat">Retirer (fond uni)</button>
+      </div>
+      <div class="range-row" id="ed-tol-row" hidden>
+        <label for="ed-tol">Tolérance</label>
+        <input type="range" id="ed-tol" min="4" max="80" step="1" value="30">
+        <output id="ed-tol-out">30</output>
+      </div>
+      <span class="ed-status" id="ed-status" role="status"></span>
+    </div>
+    <div class="ed-actions">
+      <button class="btn" id="ed-cancel">Annuler</button>
+      <button class="btn primary" id="ed-ok">Valider</button>
+    </div>
+  </div>
+</div>
+
 <script src="vendor/face-api.js"></script>
+<script src="bg.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
