@@ -422,7 +422,9 @@ function getPatch(r, sticker) {
   const N = 768;
   const base = document.createElement('canvas');
   base.width = base.height = N;
-  drawCrop(base.getContext('2d'), replSource(r), r.crop, N, r.style.flip);
+  const bctx = base.getContext('2d');
+  drawCrop(bctx, replSource(r), r.crop, N, r.style.flip);
+  if (r.erase) { bctx.globalCompositeOperation = 'destination-out'; drawCrop(bctx, r.erase, r.crop, N, r.style.flip); }
   let c = base;
   if (sticker) {
     const sil = document.createElement('canvas');
@@ -821,7 +823,7 @@ async function finishFx() {
 })();
 
 /* ---------- Éditeur de cadrage / détourage ---------- */
-const ed = { r: null, crop: null, bg: null, cut: null, style: null, adj: null, view: null, viewKey: '', cuts: new Map(), pointers: new Map(), token: 0 };
+const ed = { tool: 'move', erase: null, undo: [], stroke: false, hover: null, brush: 36, r: null, crop: null, bg: null, cut: null, style: null, adj: null, view: null, viewKey: '', cuts: new Map(), pointers: new Map(), token: 0 };
 const BG_LABELS = { auto: 'Détourage du sujet…', flat: 'Retrait du fond uni…' };
 const sizeBounds = (r) => { const m = Math.max(r.src.width, r.src.height); return [m * 0.04, m * 3]; };
 
@@ -835,6 +837,8 @@ function openEditor(id) {
   ed.style = { ...r.style };
   ed.adj = { ...r.adj };
   ed.view = null;
+  ed.erase = r.erase ? cloneCanvas(r.erase) : null;
+  ed.undo = []; ed.stroke = false; ed.hover = null; ed.tool = 'move';
   ed.cuts = new Map();
   if (r.cut) ed.cuts.set(cutKey(r.bg), r.cut);
   ed.pointers.clear();
@@ -854,7 +858,60 @@ function closeEditor() {
 }
 const cutKey = (bg) => (bg.mode === 'flat' ? 'flat' + bg.tol : bg.mode);
 
+function cloneCanvas(src) {
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  c.getContext('2d').drawImage(src, 0, 0);
+  return c;
+}
+/* ---- Gomme : masque (dans les coordonnées de l'image) des zones effacées ---- */
+function screenToCanvas(x, y) {
+  const cv = $('#ed-canvas'), rc = cv.getBoundingClientRect();
+  return { x: ((x - rc.left) / rc.width) * cv.width, y: ((y - rc.top) / rc.height) * cv.height, u: cv.width / rc.width };
+}
+function canvasToSrc(p) {
+  const C = $('#ed-canvas').width, F = C * 0.72, s = F / ed.crop.size, a = ed.crop.angle;
+  let qx = (p.x - C / 2) / s;
+  const qy = (p.y - C / 2) / s;
+  if (ed.style.flip) qx = -qx;
+  return { x: qx * Math.cos(a) - qy * Math.sin(a) + ed.crop.cx, y: qx * Math.sin(a) + qy * Math.cos(a) + ed.crop.cy, s };
+}
+function paintStroke(p0, p1) {
+  if (!ed.erase) {
+    ed.erase = document.createElement('canvas');
+    ed.erase.width = ed.r.src.width; ed.erase.height = ed.r.src.height;
+  }
+  const a = canvasToSrc(p0), b = canvasToSrc(p1);
+  const rad = (ed.brush * p1.u) / 2 / b.s;
+  const ctx = ed.erase.getContext('2d');
+  ctx.globalCompositeOperation = ed.tool === 'erase' ? 'source-over' : 'destination-out';
+  ctx.strokeStyle = ctx.fillStyle = '#000';
+  ctx.lineWidth = rad * 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(b.x, b.y, rad, 0, Math.PI * 2); ctx.fill();
+}
+function pushUndo() {
+  ed.undo.push(ed.erase ? cloneCanvas(ed.erase) : null);
+  if (ed.undo.length > 25) ed.undo.shift();
+}
+function popUndo() {
+  if (!ed.undo.length) return;
+  ed.erase = ed.undo.pop();
+  syncEditorControls(); drawEditor();
+}
+const TIPS = {
+  move: 'Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La zone claire est ce qui sera posé sur les visages.',
+  erase: 'Frotte pour effacer. Deux doigts (ou molette) pour déplacer et zoomer.',
+  restore: 'Frotte pour faire revenir ce qui a été gommé. Deux doigts (ou molette) pour déplacer et zoomer.',
+};
 function syncEditorControls() {
+  $('#ed-tool').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.tool));
+  $('#ed-brush-row').hidden = ed.tool === 'move';
+  $('#ed-brush-out').textContent = ed.brush + ' px';
+  $('#ed-undo').disabled = !ed.undo.length;
+  $('#ed-erase-clear').disabled = !ed.erase;
+  $('#ed-tip').textContent = TIPS[ed.tool];
+  $('#ed-canvas').classList.toggle('brush', ed.tool !== 'move');
   const r = ed.r;
   const [mn, mx] = sizeBounds(r);
   const v = Math.log(ed.crop.size / mx) / Math.log(mn / mx);
@@ -896,10 +953,17 @@ function drawEditor() {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, C, C);
   const F = C * 0.72;
-  ctx.save();
-  ctx.translate((C - F) / 2, (C - F) / 2);
-  drawCrop(ctx, editorSource(), ed.crop, F, ed.style.flip);
-  ctx.restore();
+  let layer = ed.layer;
+  if (!layer || layer.width !== C) { layer = ed.layer = document.createElement('canvas'); layer.width = layer.height = C; }
+  const lctx = layer.getContext('2d');
+  lctx.globalCompositeOperation = 'source-over';
+  lctx.clearRect(0, 0, C, C);
+  lctx.save();
+  lctx.translate((C - F) / 2, (C - F) / 2);
+  drawCrop(lctx, editorSource(), ed.crop, F, ed.style.flip);
+  if (ed.erase) { lctx.globalCompositeOperation = 'destination-out'; drawCrop(lctx, ed.erase, ed.crop, F, ed.style.flip); }
+  lctx.restore();
+  ctx.drawImage(layer, 0, 0);
   // voile en dehors de la forme qui sera utilisée sur la photo
   const eff = ed.style.shape === 'global' ? state.settings.shape : ed.style.shape;
   const shape = eff === 'none' ? 'square' : eff;
@@ -917,6 +981,15 @@ function drawEditor() {
   if (eff === 'none') ctx.setLineDash([8 * dpr, 6 * dpr]);
   ctx.stroke();
   ctx.restore();
+  if (ed.tool !== 'move' && ed.hover) {
+    const h = screenToCanvas(ed.hover.x, ed.hover.y);
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, (ed.brush * h.u) / 2, 0, Math.PI * 2);
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.strokeStyle = '#000'; ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function clampSize() {
@@ -971,6 +1044,7 @@ function applyEditor() {
   r.cut = ed.bg.mode !== 'none' ? ed.cut : null;
   r.style = { ...ed.style };
   r.adj = { ...ed.adj };
+  r.erase = ed.erase;
   r.rev++;
   r.patch = null; r.view = null;
   updatePreview(r);
@@ -981,14 +1055,33 @@ function applyEditor() {
 (function wireEditor() {
   const cv = $('#ed-canvas');
   cv.addEventListener('pointerdown', (e) => {
+    if (!ed.r) return;
     cv.setPointerCapture(e.pointerId);
     ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    ed.hover = { x: e.clientX, y: e.clientY };
+    if (ed.tool === 'move') return;
+    if (ed.pointers.size === 1) {
+      pushUndo(); ed.stroke = true;
+      const p = screenToCanvas(e.clientX, e.clientY);
+      paintStroke(p, p);
+    } else if (ed.stroke) {
+      // un deuxième doigt : c'était un geste de déplacement, pas un coup de gomme
+      ed.stroke = false; popUndo();
+    }
+    syncEditorControls(); drawEditor();
   });
   cv.addEventListener('pointermove', (e) => {
-    if (!ed.r || !ed.pointers.has(e.pointerId)) return;
+    if (!ed.r) return;
+    ed.hover = { x: e.clientX, y: e.clientY };
+    if (!ed.pointers.has(e.pointerId)) { if (ed.tool !== 'move') drawEditor(); return; }
     const before = [...ed.pointers.values()].map((p) => ({ ...p }));
     ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const after = [...ed.pointers.values()];
+    if (ed.tool !== 'move' && after.length === 1) {
+      if (ed.stroke) paintStroke(screenToCanvas(before[0].x, before[0].y), screenToCanvas(after[0].x, after[0].y));
+      drawEditor();
+      return;
+    }
     if (after.length === 1) {
       panBy(after[0].x - before[0].x, after[0].y - before[0].y);
     } else if (after.length >= 2) {
@@ -1003,7 +1096,18 @@ function applyEditor() {
     syncEditorControls();
     drawEditor();
   });
-  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => ed.pointers.delete(e.pointerId)));
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => {
+    ed.pointers.delete(e.pointerId);
+    if (!ed.pointers.size) ed.stroke = false;
+  }));
+  cv.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { ed.hover = null; drawEditor(); } });
+  $('#ed-tool').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (b && ed.r) { ed.tool = b.dataset.v; ed.hover = null; syncEditorControls(); drawEditor(); }
+  });
+  $('#ed-brush').addEventListener('input', (e) => { ed.brush = +e.target.value; syncEditorControls(); drawEditor(); });
+  $('#ed-undo').addEventListener('click', popUndo);
+  $('#ed-erase-clear').addEventListener('click', () => { if (ed.erase) { pushUndo(); ed.erase = null; syncEditorControls(); drawEditor(); } });
   cv.addEventListener('wheel', (e) => {
     if (!ed.r) return;
     e.preventDefault();

@@ -48,6 +48,8 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
      raccourcis « Centrer sur le visage », « Carré central », « Image entière » ;
    - **retirer l'arrière-plan** : « auto » (IA U²-Net, sujet principal : personne, animal, objet)
      ou « fond uni » (logos, fonds d'une seule couleur, avec un curseur de tolérance).
+   - **gomme** : « Gomme » efface en frottant (la photo d'origine réapparaît à cet endroit), « Restaurer » fait revenir
+     ce qui a été gommé ; taille réglable, « Annuler le dernier trait », « Tout restaurer ». Deux doigts déplacent et zooment ;
    - **miroir** ;
    - **forme et taille propres à cette image** (sinon elle suit l'étape 3), contour oui / non ;
    - **retouches** : luminosité, contraste, saturation.

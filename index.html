@@ -223,6 +223,9 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .ed-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .ed-canvas { display: block; width: min(100%, 52vh); aspect-ratio: 1; margin: 0 auto; border-radius: 12px; touch-action: none; cursor: grab; max-width: 100%; }
 .ed-canvas:active { cursor: grabbing; }
+.ed-canvas.brush, .ed-canvas.brush:active { cursor: crosshair; }
+.ed-tools { display: grid; gap: 8px; justify-items: center; }
+.ed-tools .toolbar { justify-content: center; }
 .ed-tip { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }
 .ed-bg { display: grid; gap: 8px; }
 .ed-bg .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
@@ -382,7 +385,25 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <span class="ed-name" id="ed-name"></span>
     </div>
     <canvas id="ed-canvas" class="ed-canvas" aria-label="Cadrage : glisser pour déplacer, pincer ou molette pour zoomer, deux doigts pour tourner"></canvas>
-    <p class="ed-tip">Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La zone claire est ce qui sera posé sur les visages.</p>
+    <div class="ed-tools">
+      <div class="seg" id="ed-tool" role="group" aria-label="Outil">
+        <button data-v="move" class="on">Déplacer</button>
+        <button data-v="erase">Gomme</button>
+        <button data-v="restore">Restaurer</button>
+      </div>
+      <div class="ed-tools" id="ed-brush-row" hidden>
+        <div class="range-row" style="width:100%">
+          <label for="ed-brush">Taille de la gomme</label>
+          <input type="range" id="ed-brush" min="6" max="140" step="1" value="36">
+          <output id="ed-brush-out">36 px</output>
+        </div>
+        <div class="toolbar">
+          <button class="btn small" id="ed-undo" disabled>Annuler le dernier trait</button>
+          <button class="btn small" id="ed-erase-clear" disabled>Tout restaurer</button>
+        </div>
+      </div>
+    </div>
+    <p class="ed-tip" id="ed-tip">Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La zone claire est ce qui sera posé sur les visages.</p>
     <div class="range-row">
       <label for="ed-zoom">Zoom</label>
       <input type="range" id="ed-zoom" min="0" max="1" step="0.001" value="0.5">
