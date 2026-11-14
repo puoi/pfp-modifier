@@ -142,7 +142,7 @@ function addRepls(files) {
     const r = {
       id: nid('r'), file, name: file.name, thumb: null, preview: null, src: null, face: null,
       crop: null, cropEdited: false, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
-      style: defaultStyle(), adj: defaultAdj(),
+      style: defaultStyle(), adj: defaultAdj(), collar: defaultCollar(),
     };
     state.repls.push(r);
     replChain = replChain.then(() => prepareRepl(r));
@@ -174,6 +174,8 @@ async function prepareRepl(r) {
     freeImage(img);
     r.thumb = coverThumb(r.src, 200);
     r.crop = defaultCrop(r, 'auto');
+    const am = autoModel();
+    if (am) await applyModelToRepl(r, am);
     r.ready = true;
     updatePreview(r);
     renderRepls(); renderGroups();
@@ -424,14 +426,18 @@ function replSource(r) {
   return r.view;
 }
 // Dessine le cadrage d'une image de remplacement dans un carré de N px.
-function drawCrop(ctx, src, crop, N, flip) {
+function withCrop(ctx, crop, N, flip, fn) {
   ctx.save();
   ctx.translate(N / 2, N / 2);
   ctx.scale(N / crop.size, N / crop.size);
   if (flip) ctx.scale(-1, 1);
   ctx.rotate(-crop.angle);
-  ctx.drawImage(src, -crop.cx, -crop.cy);
+  ctx.translate(-crop.cx, -crop.cy);
+  fn();
   ctx.restore();
+}
+function drawCrop(ctx, src, crop, N, flip) {
+  withCrop(ctx, crop, N, flip, () => ctx.drawImage(src, 0, 0));
 }
 // sticker = contour blanc qui suit la silhouette détourée
 function getPatch(r, sticker) {
@@ -443,6 +449,7 @@ function getPatch(r, sticker) {
   const bctx = base.getContext('2d');
   drawCrop(bctx, replSource(r), r.crop, N, r.style.flip);
   if (r.erase) { bctx.globalCompositeOperation = 'destination-out'; drawCrop(bctx, r.erase, r.crop, N, r.style.flip); }
+  cutCollar(bctx, r.collar, r.src.width, r.src.height, r.crop, N, r.style.flip);
   let c = base;
   if (sticker) {
     const sil = document.createElement('canvas');
@@ -856,6 +863,9 @@ function openEditor(id) {
   ed.adj = { ...r.adj };
   ed.view = null;
   ed.erase = r.erase ? cloneCanvas(r.erase) : null;
+  ed.collar = { ...defaultCollar(), ...r.collar };
+  ed.collarDrag = null;
+  renderModels();
   ed.undo = []; ed.stroke = false; ed.hover = null; ed.tool = 'move';
   ed.cuts = new Map();
   if (r.cut) ed.cuts.set(cutKey(r.bg), r.cut);
@@ -908,6 +918,16 @@ function paintStroke(p0, p1) {
   ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
   ctx.beginPath(); ctx.arc(b.x, b.y, rad, 0, Math.PI * 2); ctx.fill();
 }
+// Active la ligne du col, placée par défaut un peu sous le centre de la vue.
+function enableCollar() {
+  if (ed.collar.on) return;
+  const w = ed.r.src.width, h = ed.r.src.height;
+  if (!ed.collar.placed) {
+    ed.collar.vx = ed.crop.cx / w;
+    ed.collar.vy = (ed.crop.cy + ed.crop.size * 0.18) / h;
+  }
+  ed.collar.on = true; ed.collar.placed = true;
+}
 function pushUndo() {
   ed.undo.push(ed.erase ? cloneCanvas(ed.erase) : null);
   if (ed.undo.length > 25) ed.undo.shift();
@@ -921,10 +941,15 @@ const TIPS = {
   move: 'Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La zone claire est ce qui sera posé sur les visages.',
   erase: 'Frotte pour effacer. Deux doigts (ou molette) pour déplacer et zoomer.',
   restore: 'Frotte pour faire revenir ce qui a été gommé. Deux doigts (ou molette) pour déplacer et zoomer.',
+  collar: 'Glisse pour placer la pointe de la ligne jaune sur le col. Tout ce qui est sous la ligne est retiré. Deux doigts pour déplacer et zoomer.',
 };
 function syncEditorControls() {
   $('#ed-tool').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.tool));
-  $('#ed-brush-row').hidden = ed.tool === 'move';
+  $('#ed-brush-row').hidden = ed.tool !== 'erase' && ed.tool !== 'restore';
+  $('#ed-collar-on').checked = ed.collar.on;
+  $('#ed-copen').value = ed.collar.open; $('#ed-copen-out').textContent = Math.round(ed.collar.open) + '°';
+  $('#ed-ctilt').value = ed.collar.tilt; $('#ed-ctilt-out').textContent = Math.round(ed.collar.tilt) + '°';
+  $('#ed-cround').value = ed.collar.round; $('#ed-cround-out').textContent = Math.round(ed.collar.round);
   $('#ed-brush-out').textContent = ed.brush + ' px';
   $('#ed-undo').disabled = !ed.undo.length;
   $('#ed-erase-clear').disabled = !ed.erase;
@@ -980,6 +1005,7 @@ function drawEditor() {
   lctx.translate((C - F) / 2, (C - F) / 2);
   drawCrop(lctx, editorSource(), ed.crop, F, ed.style.flip);
   if (ed.erase) { lctx.globalCompositeOperation = 'destination-out'; drawCrop(lctx, ed.erase, ed.crop, F, ed.style.flip); }
+  cutCollar(lctx, ed.collar, ed.r.src.width, ed.r.src.height, ed.crop, F, ed.style.flip);
   lctx.restore();
   ctx.drawImage(layer, 0, 0);
   // voile en dehors de la forme qui sera utilisée sur la photo
@@ -999,7 +1025,26 @@ function drawEditor() {
   if (eff === 'none') ctx.setLineDash([8 * dpr, 6 * dpr]);
   ctx.stroke();
   ctx.restore();
-  if (ed.tool !== 'move' && ed.hover) {
+  // ligne du col (jaune) et sa pointe
+  if (ed.collar.on || ed.tool === 'collar') {
+    const w = ed.r.src.width, h = ed.r.src.height, u = (ed.crop.size / F) * dpr;
+    ctx.save();
+    ctx.translate((C - F) / 2, (C - F) / 2);
+    withCrop(ctx, ed.crop, F, ed.style.flip, () => {
+      ctx.beginPath(); collarPath(ctx, ed.collar, w, h, false);
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 5 * u; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke();
+      ctx.lineWidth = 2.5 * u; ctx.strokeStyle = ed.collar.on ? '#ffd166' : 'rgba(255,209,102,.6)';
+      if (!ed.collar.on) ctx.setLineDash([8 * u, 6 * u]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(ed.collar.vx * w, ed.collar.vy * h, 8 * u, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffd166'; ctx.fill();
+      ctx.lineWidth = 2 * u; ctx.strokeStyle = '#000'; ctx.stroke();
+    });
+    ctx.restore();
+  }
+  if ((ed.tool === 'erase' || ed.tool === 'restore') && ed.hover) {
     const h = screenToCanvas(ed.hover.x, ed.hover.y);
     ctx.beginPath();
     ctx.arc(h.x, h.y, (ed.brush * h.u) / 2, 0, Math.PI * 2);
@@ -1068,6 +1113,7 @@ function applyEditor() {
   }
   r.adj = { ...ed.adj };
   r.erase = ed.erase;
+  r.collar = { ...ed.collar };
   r.rev++;
   r.patch = null; r.view = null;
   updatePreview(r);
@@ -1083,6 +1129,15 @@ function applyEditor() {
     ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     ed.hover = { x: e.clientX, y: e.clientY };
     if (ed.tool === 'move') return;
+    if (ed.tool === 'collar') {
+      if (ed.pointers.size === 1) {
+        if (!ed.collar.on) enableCollar();
+        const p = canvasToSrc(screenToCanvas(e.clientX, e.clientY));
+        ed.collarDrag = { dx: ed.collar.vx * ed.r.src.width - p.x, dy: ed.collar.vy * ed.r.src.height - p.y };
+      } else ed.collarDrag = null;
+      syncEditorControls(); drawEditor();
+      return;
+    }
     if (ed.pointers.size === 1) {
       pushUndo(); ed.stroke = true;
       const p = screenToCanvas(e.clientX, e.clientY);
@@ -1101,7 +1156,13 @@ function applyEditor() {
     ed.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const after = [...ed.pointers.values()];
     if (ed.tool !== 'move' && after.length === 1) {
-      if (ed.stroke) paintStroke(screenToCanvas(before[0].x, before[0].y), screenToCanvas(after[0].x, after[0].y));
+      if (ed.tool === 'collar') {
+        if (ed.collarDrag) {
+          const p = canvasToSrc(screenToCanvas(after[0].x, after[0].y));
+          ed.collar.vx = (p.x + ed.collarDrag.dx) / ed.r.src.width;
+          ed.collar.vy = (p.y + ed.collarDrag.dy) / ed.r.src.height;
+        }
+      } else if (ed.stroke) paintStroke(screenToCanvas(before[0].x, before[0].y), screenToCanvas(after[0].x, after[0].y));
       drawEditor();
       return;
     }
@@ -1121,7 +1182,7 @@ function applyEditor() {
   });
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => {
     ed.pointers.delete(e.pointerId);
-    if (!ed.pointers.size) ed.stroke = false;
+    if (!ed.pointers.size) { ed.stroke = false; ed.collarDrag = null; }
   }));
   cv.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { ed.hover = null; drawEditor(); } });
   $('#ed-tool').addEventListener('click', (e) => {
@@ -1178,6 +1239,25 @@ function applyEditor() {
     });
   }
   $('#ed-adj-reset').addEventListener('click', () => { ed.adj = defaultAdj(); syncEditorControls(); drawEditor(); });
+  $('#ed-collar-on').addEventListener('change', (e) => {
+    if (!ed.r) return;
+    if (e.target.checked) { enableCollar(); ed.tool = 'collar'; } else ed.collar.on = false;
+    syncEditorControls(); drawEditor();
+  });
+  for (const [id, key] of [['#ed-copen', 'open'], ['#ed-ctilt', 'tilt'], ['#ed-cround', 'round']]) {
+    $(id).addEventListener('input', (e) => {
+      if (!ed.r) return;
+      if (!ed.collar.on) enableCollar();
+      ed.collar[key] = +e.target.value;
+      syncEditorControls(); drawEditor();
+    });
+  }
+  $('#ed-fit').addEventListener('click', () => {
+    if (!ed.r) return;
+    const f = frameContent(ed.bg.mode !== 'none' && ed.cut ? ed.cut : ed.r.src, ed.erase, ed.collar);
+    if (f) { ed.crop = f; syncEditorControls(); drawEditor(); }
+  });
+  $('#ed-msave').addEventListener('click', saveModel);
   $('#ed-cancel').addEventListener('click', closeEditor);
   $('#ed-ok').addEventListener('click', applyEditor);
   window.addEventListener('resize', () => { if (ed.r) drawEditor(); });
@@ -1189,19 +1269,23 @@ const LIB = (() => {
   function db() {
     if (!dbp) {
       dbp = new Promise((res, rej) => {
-        const q = indexedDB.open('pfp-lib', 1);
-        q.onupgradeneeded = () => q.result.createObjectStore('items', { keyPath: 'id' });
+        const q = indexedDB.open('pfp-lib', 2);
+        q.onupgradeneeded = () => {
+          for (const name of ['items', 'models']) {
+            if (!q.result.objectStoreNames.contains(name)) q.result.createObjectStore(name, { keyPath: 'id' });
+          }
+        };
         q.onsuccess = () => res(q.result);
         q.onerror = () => rej(q.error);
       }).catch((e) => { dbp = null; throw e; });
     }
     return dbp;
   }
-  async function tx(mode, fn) {
+  async function tx(mode, fn, store = 'items') {
     const d = await db();
     return new Promise((res, rej) => {
-      const t = d.transaction('items', mode);
-      const r = fn(t.objectStore('items'));
+      const t = d.transaction(store, mode);
+      const r = fn(t.objectStore(store));
       t.oncomplete = () => res(r && r.result);
       t.onerror = t.onabort = () => rej(t.error);
     });
@@ -1210,6 +1294,9 @@ const LIB = (() => {
     all: () => tx('readonly', (s) => s.getAll()),
     put: (item) => tx('readwrite', (s) => s.put(item)),
     del: (id) => tx('readwrite', (s) => s.delete(id)),
+    allModels: () => tx('readonly', (s) => s.getAll(), 'models'),
+    putModel: (m) => tx('readwrite', (s) => s.put(m), 'models'),
+    delModel: (id) => tx('readwrite', (s) => s.delete(id), 'models'),
   };
 })();
 state.lib = [];
@@ -1248,6 +1335,7 @@ async function restoreFromLib(r, it) {
   r.face = it.face || null;
   r.crop = { ...it.crop }; r.cropEdited = true;
   r.bg = { ...it.bg }; r.style = { ...defaultStyle(), ...it.style }; r.adj = { ...defaultAdj(), ...it.adj };
+  r.collar = { ...defaultCollar(), ...it.collar };
   r.name = it.name;
   r.thumb = coverThumb(r.src, 200);
   r.rev++; r.patch = null; r.view = null;
@@ -1271,7 +1359,7 @@ function libSave(r) {
       src: prev ? prev.src : await toBlob(r.src, 'image/jpeg', 0.92),
       cut: r.bg.mode !== 'none' && r.cut ? await toBlob(r.cut, 'image/png') : null,
       erase: r.erase ? await toBlob(r.erase, 'image/png') : null,
-      crop: { ...r.crop }, bg: { ...r.bg }, style: { ...r.style }, adj: { ...r.adj }, face: r.face,
+      crop: { ...r.crop }, bg: { ...r.bg }, style: { ...r.style }, adj: { ...r.adj }, collar: { ...r.collar }, face: r.face,
       thumb: r.preview,
     };
     await LIB.put(item);
@@ -1304,7 +1392,7 @@ function useLib(it) {
   const r = {
     id: nid('r'), file: it.src, name: it.name, hash: it.id, thumb: it.thumb, preview: it.thumb, src: null, face: null,
     crop: null, cropEdited: true, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
-    style: defaultStyle(), adj: defaultAdj(),
+    style: defaultStyle(), adj: defaultAdj(), collar: defaultCollar(),
   };
   state.repls.push(r);
   replChain = replChain.then(() => prepareRepl(r));
@@ -1400,6 +1488,148 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
 }
+
+/* ---------- Découpe au col (garder la tête) et modèles de découpe ---------- */
+// vx, vy : pointe de la ligne (fraction de la largeur / hauteur de l'image) ;
+// open : ouverture en degrés (< 180 = V, > 180 = Λ) ; tilt : inclinaison ; round : arrondi de la pointe (0-100).
+const defaultCollar = () => ({ on: false, vx: 0.5, vy: 0.62, open: 150, tilt: 0, round: 0 });
+function collarPath(ctx, c, w, h, closed) {
+  const V = { x: c.vx * w, y: c.vy * h };
+  const R = Math.hypot(w, h) * 2;
+  const t = (c.tilt * Math.PI) / 180, half = (c.open * Math.PI) / 360;
+  const dir = (a) => ({ x: Math.sin(t + a), y: -Math.cos(t + a) });
+  const dl = dir(-half), dr = dir(half), down = { x: -Math.sin(t), y: Math.cos(t) };
+  const rd = (c.round / 100) * 0.4 * Math.min(w, h);
+  const L = { x: V.x + dl.x * R, y: V.y + dl.y * R }, Rt = { x: V.x + dr.x * R, y: V.y + dr.y * R };
+  ctx.moveTo(L.x, L.y);
+  if (rd > 0) {
+    ctx.lineTo(V.x + dl.x * rd, V.y + dl.y * rd);
+    ctx.quadraticCurveTo(V.x, V.y, V.x + dr.x * rd, V.y + dr.y * rd);
+  } else ctx.lineTo(V.x, V.y);
+  ctx.lineTo(Rt.x, Rt.y);
+  if (closed) {
+    ctx.lineTo(Rt.x + down.x * R, Rt.y + down.y * R);
+    ctx.lineTo(L.x + down.x * R, L.y + down.y * R);
+    ctx.closePath();
+  }
+}
+// Retire (destination-out) tout ce qui est sous la ligne du col, dans le repère d'un cadrage.
+function cutCollar(ctx, collar, w, h, crop, N, flip) {
+  if (!collar || !collar.on) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  withCrop(ctx, crop, N, flip, () => { ctx.beginPath(); collarPath(ctx, collar, w, h, true); ctx.fill(); });
+  ctx.restore();
+}
+// Boîte englobante de ce qui reste visible (pour cadrer sur la tête).
+function frameContent(src, erase, collar) {
+  const w = src.width, h = src.height, k = Math.min(1, 320 / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.scale(k, k);
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = 'destination-out';
+  if (erase) ctx.drawImage(erase, 0, 0, w, h);
+  if (collar && collar.on) { ctx.beginPath(); collarPath(ctx, collar, w, h, true); ctx.fill(); }
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+    if (d[(y * c.width + x) * 4 + 3] > 40) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < 0) return null;
+  x0 /= k; y0 /= k; x1 = (x1 + 1) / k; y1 = (y1 + 1) / k;
+  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0) * 1.04, angle: 0 };
+}
+
+state.models = [];
+LIB.allModels()
+  .then((m) => { state.models = m || []; })
+  .catch((err) => console.warn('Modèles indisponibles :', err))
+  .then(() => { renderModels(); renderAutoModel(); });
+let autoModelId = '';
+try { autoModelId = localStorage.getItem('pfp-auto-model') || ''; } catch (e) { /* stockage indisponible */ }
+const autoModel = () => state.models.find((m) => m.id === autoModelId) || null;
+
+function modelFromEditor(name) {
+  const w = ed.r.src.width, h = ed.r.src.height, M = Math.max(w, h);
+  return {
+    name, created: Date.now(), autoFrame: $('#ed-mfit').checked,
+    crop: { cx: ed.crop.cx / w, cy: ed.crop.cy / h, size: ed.crop.size / M, angle: ed.crop.angle },
+    bg: { ...ed.bg }, style: { ...ed.style }, adj: { ...ed.adj }, collar: { ...ed.collar },
+  };
+}
+function modelCrop(m, w, h) {
+  return { cx: m.crop.cx * w, cy: m.crop.cy * h, size: m.crop.size * Math.max(w, h), angle: m.crop.angle };
+}
+async function applyModelToEditor(m) {
+  const r = ed.r, w = r.src.width, h = r.src.height;
+  ed.collar = { ...defaultCollar(), ...m.collar };
+  ed.style = { ...defaultStyle(), ...m.style };
+  ed.adj = { ...defaultAdj(), ...m.adj };
+  ed.crop = modelCrop(m, w, h);
+  syncEditorControls(); drawEditor();
+  await setEditorBg(m.bg.mode, m.bg.tol);
+  if (ed.r !== r) return;
+  if (m.autoFrame) {
+    const f = frameContent(ed.bg.mode !== 'none' && ed.cut ? ed.cut : r.src, ed.erase, ed.collar);
+    if (f) ed.crop = f;
+  }
+  syncEditorControls(); drawEditor();
+}
+async function applyModelToRepl(r, m) {
+  r.collar = { ...defaultCollar(), ...m.collar };
+  r.style = { ...defaultStyle(), ...m.style };
+  r.adj = { ...defaultAdj(), ...m.adj };
+  r.bg = { ...m.bg };
+  r.cut = null;
+  if (m.bg.mode !== 'none') {
+    try { r.cut = await BG.cut(r.src, m.bg.mode, m.bg.tol); } catch (err) { console.error(err); r.bg = { mode: 'none', tol: 30 }; }
+  }
+  r.crop = modelCrop(m, r.src.width, r.src.height);
+  if (m.autoFrame) { const f = frameContent(rawSource(r), r.erase, r.collar); if (f) r.crop = f; }
+  r.cropEdited = true;
+  r.rev++; r.patch = null; r.view = null;
+}
+async function saveModel() {
+  if (!ed.r) return;
+  const name = $('#ed-mname').value.trim() || 'Modèle ' + (state.models.length + 1);
+  const prev = state.models.find((m) => norm(m.name) === norm(name)); // même nom = mise à jour, pas de doublon
+  const m = { ...modelFromEditor(name), id: prev ? prev.id : 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
+  try {
+    await LIB.putModel(m);
+    state.models = state.models.filter((x) => x.id !== m.id).concat(m);
+    $('#ed-mname').value = '';
+    toast(prev ? `Modèle « ${name} » mis à jour.` : `Modèle « ${name} » enregistré.`);
+  } catch (err) { toast('Modèle non enregistré : ' + err.message); }
+  renderModels(); renderAutoModel();
+}
+async function deleteModel(m) {
+  if (!confirm(`Supprimer le modèle « ${m.name} » ?`)) return;
+  await LIB.delModel(m.id);
+  state.models = state.models.filter((x) => x.id !== m.id);
+  renderModels(); renderAutoModel();
+}
+function renderModels() {
+  const box = $('#ed-models');
+  const list = state.models.slice().sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  box.replaceChildren(...(list.length ? list.map((m) => el('span', { class: 'model-chip' },
+    el('button', { class: 'apply', text: m.name, title: 'Appliquer ce modèle', onclick: () => { if (ed.r) applyModelToEditor(m); } }),
+    el('button', { class: 'del', text: '×', 'aria-label': 'Supprimer le modèle ' + m.name, onclick: () => deleteModel(m) })))
+    : [el('span', { class: 'pane-hint', text: 'Aucun modèle pour l\'instant.' })]));
+}
+function renderAutoModel() {
+  const sel = $('#auto-model');
+  $('#auto-model-row').hidden = !state.models.length;
+  if (autoModelId && !autoModel()) autoModelId = '';
+  sel.replaceChildren(el('option', { value: '', text: 'telles quelles' }),
+    ...state.models.slice().sort((a, b) => a.name.localeCompare(b.name, 'fr')).map((m) => el('option', { value: m.id, text: 'modèle « ' + m.name + ' »' })));
+  sel.value = autoModelId;
+}
+$('#auto-model').addEventListener('change', (e) => {
+  autoModelId = e.target.value;
+  try { localStorage.setItem('pfp-auto-model', autoModelId); } catch (err) { /* stockage indisponible */ }
+});
 
 /* ---------- UI ---------- */
 function setStatus(msg, pct) {

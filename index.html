@@ -237,6 +237,16 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .lib-item .x { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--scrim); color: #fff; font-size: 14px; line-height: 24px; cursor: pointer; padding: 0; }
 .lib .toolbar .btn { position: relative; }
 .lib .toolbar input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.chk { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.model-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.model-chip { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.model-chip button { border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--ink); }
+.model-chip .apply { padding: 6px 4px 6px 12px; font-weight: 600; }
+.model-chip .apply:hover { color: var(--accent); }
+.model-chip .del { padding: 6px 10px 6px 6px; color: var(--muted); }
+.model-save { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-save input { flex: 1 1 160px; min-width: 0; border: 1px solid var(--line); background: var(--sunken); border-radius: 999px; padding: 7px 12px; font-size: 16px; color: var(--ink); }
+.pill-select { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 7px 12px; max-width: 100%; flex: 1 1 160px; min-width: 0; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 60;
   background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: min(92vw, 520px); box-shadow: 0 8px 28px rgba(0,0,0,.25); pointer-events: none; }
 .ed-canvas { display: block; width: min(100%, 52vh); aspect-ratio: 1; margin: 0 auto; border-radius: 12px; touch-action: none; cursor: grab; max-width: 100%; }
@@ -290,6 +300,10 @@ footer.foot { color: var(--muted); font-size: 12px; }
           <input type="file" id="in-repls" accept="image/*" multiple>
           <span><strong>Choisir des images</strong> (photo de profil, logo, emoji…)</span>
         </label>
+        <div class="range-row" id="auto-model-row" hidden>
+          <label for="auto-model">Préparer les nouvelles images</label>
+          <select id="auto-model" class="pill-select"></select>
+        </div>
         <p class="pane-hint" id="repl-hint" hidden>Touche une image pour ajuster son cadrage ou retirer son arrière-plan.</p>
         <div class="thumbs" id="repls"></div>
         <div class="lib" id="lib">
@@ -417,6 +431,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
         <button data-v="move" class="on">Déplacer</button>
         <button data-v="erase">Gomme</button>
         <button data-v="restore">Restaurer</button>
+        <button data-v="collar">Col</button>
       </div>
       <div class="ed-tools" id="ed-brush-row" hidden>
         <div class="range-row" style="width:100%">
@@ -446,7 +461,42 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <button class="btn small" id="ed-center">Carré central</button>
       <button class="btn small" id="ed-full">Image entière</button>
       <button class="btn small" id="ed-flip" aria-pressed="false">Miroir</button>
+      <button class="btn small" id="ed-fit">Cadrer sur ce qui reste</button>
     </div>
+    <details class="ed-sec" id="ed-collar-sec">
+      <summary>Découpe au col (garder la tête)</summary>
+      <div class="in">
+        <label class="chk"><input type="checkbox" id="ed-collar-on"> Couper sous la ligne du col</label>
+        <div class="range-row">
+          <label for="ed-copen">Ouverture</label>
+          <input type="range" id="ed-copen" min="40" max="320" step="1" value="150">
+          <output id="ed-copen-out">150°</output>
+        </div>
+        <div class="range-row">
+          <label for="ed-ctilt">Inclinaison</label>
+          <input type="range" id="ed-ctilt" min="-60" max="60" step="1" value="0">
+          <output id="ed-ctilt-out">0°</output>
+        </div>
+        <div class="range-row">
+          <label for="ed-cround">Arrondi</label>
+          <input type="range" id="ed-cround" min="0" max="100" step="1" value="0">
+          <output id="ed-cround-out">0</output>
+        </div>
+        <p class="pane-hint">Outil « Col » : glisse pour placer la pointe de la ligne jaune à la jonction chemise / cou. Moins de 180° : V (col ouvert), 180° : droit, plus de 180° : Λ. Puis « Cadrer sur ce qui reste ».</p>
+      </div>
+    </details>
+    <details class="ed-sec" id="ed-models-sec">
+      <summary>Modèles de découpe</summary>
+      <div class="in">
+        <div class="model-list" id="ed-models"></div>
+        <div class="model-save">
+          <input id="ed-mname" placeholder="Nom du modèle (ex. Penguin)" aria-label="Nom du modèle" enterkeyhint="done">
+          <button class="btn small" id="ed-msave">Enregistrer comme modèle</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="ed-mfit" checked> Le modèle recadre automatiquement sur ce qui reste</label>
+        <p class="pane-hint">Un modèle garde le col, le détourage, le cadrage, la forme, la taille et les retouches. Touche un modèle pour l'appliquer à cette image ; même nom = mise à jour.</p>
+      </div>
+    </details>
     <details class="ed-sec" open>
       <summary>Forme et taille sur la photo</summary>
       <div class="in">

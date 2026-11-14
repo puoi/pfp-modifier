@@ -53,6 +53,13 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
    - **miroir** ;
    - **forme et taille propres à cette image** (sinon elle suit l'étape 3), contour oui / non ;
    - **retouches** : luminosité, contraste, saturation.
+   - **découpe au col** (garder seulement la tête d'un personnage) : outil « Col », glisse pour placer la pointe
+     de la ligne jaune à la jonction chemise / cou ; règle l'ouverture (V < 180° < Λ), l'inclinaison et l'arrondi.
+     Tout ce qui est sous la ligne est retiré. « Cadrer sur ce qui reste » recadre sur la tête ;
+   - **modèles de découpe** : « Enregistrer comme modèle » garde col, détourage, cadrage, forme, taille et retouches.
+     Touche un modèle pour l'appliquer à une autre image, ou choisis-le dans « Préparer les nouvelles images » :
+     toutes les images ajoutées ensuite sont découpées automatiquement (cadrage recalculé sur ce qui reste,
+     donc ça suit un personnage légèrement décalé) ;
    - **bibliothèque** : chaque image posée sur une photo que tu enregistres y est gardée automatiquement, avec son
      recadrage, son détourage, sa gomme et ses réglages (une seule fois par image : un même fichier n'est jamais dupliqué,
      et le réajouter récupère ses réglages). Touche une image de la bibliothèque pour la réutiliser, touche son nom pour
