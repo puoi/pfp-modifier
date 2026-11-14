@@ -220,7 +220,25 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .ed-panel { margin: auto 0; width: 100%; max-width: 540px; background: var(--surface); border-radius: 18px; padding: 16px; display: grid; gap: 12px; }
 .ed-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .ed-head h3 { margin: 0; font: 600 19px/1.2 var(--font-display); }
-.ed-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.ed-name { color: var(--ink); font-size: 14px; min-width: 0; flex: 1 1 140px; border: 1px solid var(--line); background: var(--sunken); border-radius: 8px; padding: 6px 9px; }
+.lib { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.lib h4 { margin: 0; font: 600 14px/1.2 var(--font-body); display: flex; gap: 8px; align-items: baseline; }
+.lib h4 .count { font: 500 12px var(--font-mono); color: var(--muted); }
+.lib input[type=search] { border: 1px solid var(--line); background: var(--sunken); border-radius: 999px; padding: 8px 14px; font-size: 16px; width: 100%; min-width: 0; }
+.lib-list { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); max-height: 420px; overflow-y: auto; padding: 2px; }
+.lib-item { position: relative; display: grid; gap: 4px; min-width: 0; }
+.lib-use { all: unset; position: relative; display: block; aspect-ratio: 1; border-radius: 9px; overflow: hidden; cursor: pointer; }
+.lib-use:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.lib-use img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lib-item.on .lib-use { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lib-use .tag { position: absolute; left: 4px; bottom: 4px; padding: 2px 6px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font: 500 10px/1.4 var(--font-mono); }
+.lib-name { border: 0; background: transparent; font-size: 13px; padding: 3px 4px; border-radius: 6px; min-width: 0; width: 100%; color: var(--ink); text-overflow: ellipsis; }
+.lib-name:hover, .lib-name:focus { background: var(--sunken); }
+.lib-item .x { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: var(--scrim); color: #fff; font-size: 14px; line-height: 24px; cursor: pointer; padding: 0; }
+.lib .toolbar .btn { position: relative; }
+.lib .toolbar input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 60;
+  background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: min(92vw, 520px); box-shadow: 0 8px 28px rgba(0,0,0,.25); pointer-events: none; }
 .ed-canvas { display: block; width: min(100%, 52vh); aspect-ratio: 1; margin: 0 auto; border-radius: 12px; touch-action: none; cursor: grab; max-width: 100%; }
 .ed-canvas:active { cursor: grabbing; }
 .ed-canvas.brush, .ed-canvas.brush:active { cursor: crosshair; }
@@ -274,6 +292,15 @@ footer.foot { color: var(--muted); font-size: 12px; }
         </label>
         <p class="pane-hint" id="repl-hint" hidden>Touche une image pour ajuster son cadrage ou retirer son arrière-plan.</p>
         <div class="thumbs" id="repls"></div>
+        <div class="lib" id="lib">
+          <h4>Bibliothèque <span class="count" id="lib-count"></span></h4>
+          <input type="search" id="lib-q" placeholder="Rechercher par nom…" aria-label="Rechercher dans la bibliothèque" autocomplete="off" hidden>
+          <div class="lib-list" id="lib-list"></div>
+          <div class="toolbar">
+            <button class="btn small" id="lib-export" disabled>Sauvegarder dans Fichiers</button>
+            <label class="btn small">Restaurer une sauvegarde<input type="file" id="lib-import" accept=".json,application/json"></label>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -382,7 +409,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
   <div class="ed-panel">
     <div class="ed-head">
       <h3 id="ed-title">Ajuster l'image</h3>
-      <span class="ed-name" id="ed-name"></span>
+      <input class="ed-name" id="ed-name" aria-label="Nom de l'image" enterkeyhint="done">
     </div>
     <canvas id="ed-canvas" class="ed-canvas" aria-label="Cadrage : glisser pour déplacer, pincer ou molette pour zoomer, deux doigts pour tourner"></canvas>
     <div class="ed-tools">
@@ -490,6 +517,8 @@ footer.foot { color: var(--muted); font-size: 12px; }
     </div>
   </div>
 </div>
+
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script src="vendor/face-api.js"></script>
 <script src="bg.js"></script>

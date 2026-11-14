@@ -53,6 +53,12 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
    - **miroir** ;
    - **forme et taille propres à cette image** (sinon elle suit l'étape 3), contour oui / non ;
    - **retouches** : luminosité, contraste, saturation.
+   - **bibliothèque** : chaque image posée sur une photo que tu enregistres y est gardée automatiquement, avec son
+     recadrage, son détourage, sa gomme et ses réglages (une seule fois par image : un même fichier n'est jamais dupliqué,
+     et le réajouter récupère ses réglages). Touche une image de la bibliothèque pour la réutiliser, touche son nom pour
+     la renommer, cherche par nom (sans tenir compte des accents ni des majuscules).
+     La bibliothèque vit dans l'app, sur l'appareil. « Sauvegarder dans Fichiers » en fait une copie (un fichier .json)
+     à ranger dans le dossier de ton choix (Partager → Enregistrer dans Fichiers) ; « Restaurer une sauvegarde » la recharge.
 2. **Les personnes** : « Détecter les visages ». Les visages sont regroupés par personne (deux visages
    d'une même photo ne sont jamais mis ensemble).
    - Touche des visages pour les sélectionner, puis « Nouvelle personne », « Déplacer vers… » ou « Ignorer ».

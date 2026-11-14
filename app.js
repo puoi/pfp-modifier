@@ -152,6 +152,23 @@ function addRepls(files) {
 async function prepareRepl(r) {
   if (!state.repls.includes(r)) return;
   try {
+    if (!r.hash) r.hash = await hashBlob(r.file);
+    const dup = state.repls.find((x) => x !== r && x.hash === r.hash);
+    if (dup) {
+      state.repls = state.repls.filter((x) => x !== r);
+      toast(`« ${baseName(dup.name)} » est déjà dans la liste.`);
+      renderRepls();
+      return;
+    }
+    await libReady;
+    const it = libItem(r.hash);
+    if (it) {
+      const fromFile = r.file !== it.src;
+      await restoreFromLib(r, it);
+      if (fromFile) toast(`Déjà dans la bibliothèque : « ${it.name} ». Recadrage et retouches récupérés.`);
+      renderRepls(); renderGroups(); scheduleRender();
+      return;
+    }
     const img = await loadImage(r.file);
     r.src = fitCanvas(img, img.naturalWidth, img.naturalHeight, 1024);
     freeImage(img);
@@ -179,6 +196,7 @@ async function prepareRepl(r) {
   if (r.ready) updatePreview(r);
   renderRepls(); renderGroups(); scheduleRender();
 }
+
 // Réglages propres à chaque image de remplacement ('global' = suivre l'étape 3)
 const defaultStyle = () => ({ shape: 'global', size: 1, outline: 'global', flip: false });
 const defaultAdj = () => ({ bright: 0, contrast: 0, sat: 0 });
@@ -842,7 +860,7 @@ function openEditor(id) {
   ed.cuts = new Map();
   if (r.cut) ed.cuts.set(cutKey(r.bg), r.cut);
   ed.pointers.clear();
-  $('#ed-name').textContent = r.name;
+  $('#ed-name').value = baseName(r.name);
   $('#ed-face').hidden = !r.face;
   $('#ed-tol').value = ed.bg.tol;
   $('#editor').hidden = false;
@@ -1043,6 +1061,11 @@ function applyEditor() {
   r.bg = { ...ed.bg };
   r.cut = ed.bg.mode !== 'none' ? ed.cut : null;
   r.style = { ...ed.style };
+  const nm = $('#ed-name').value.trim();
+  if (nm && nm !== baseName(r.name)) {
+    r.name = nm;
+    if (libItem(r.hash)) renameLib(r.hash, nm);
+  }
   r.adj = { ...ed.adj };
   r.erase = ed.erase;
   r.rev++;
@@ -1160,6 +1183,224 @@ function applyEditor() {
   window.addEventListener('resize', () => { if (ed.r) drawEditor(); });
 })();
 
+/* ---------- Bibliothèque d'images de remplacement (IndexedDB, sur l'appareil) ---------- */
+const LIB = (() => {
+  let dbp = null;
+  function db() {
+    if (!dbp) {
+      dbp = new Promise((res, rej) => {
+        const q = indexedDB.open('pfp-lib', 1);
+        q.onupgradeneeded = () => q.result.createObjectStore('items', { keyPath: 'id' });
+        q.onsuccess = () => res(q.result);
+        q.onerror = () => rej(q.error);
+      }).catch((e) => { dbp = null; throw e; });
+    }
+    return dbp;
+  }
+  async function tx(mode, fn) {
+    const d = await db();
+    return new Promise((res, rej) => {
+      const t = d.transaction('items', mode);
+      const r = fn(t.objectStore('items'));
+      t.oncomplete = () => res(r && r.result);
+      t.onerror = t.onabort = () => rej(t.error);
+    });
+  }
+  return {
+    all: () => tx('readonly', (s) => s.getAll()),
+    put: (item) => tx('readwrite', (s) => s.put(item)),
+    del: (id) => tx('readwrite', (s) => s.delete(id)),
+  };
+})();
+state.lib = [];
+const libReady = LIB.all()
+  .then((items) => { state.lib = items || []; })
+  .catch((err) => { console.warn('Bibliothèque indisponible :', err); state.libError = true; })
+  .then(() => renderLib());
+
+// Empreinte du fichier : la même image n'est jamais enregistrée deux fois.
+async function hashBlob(b) {
+  const buf = await b.arrayBuffer();
+  if (window.crypto && crypto.subtle) {
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+    return 'h' + [...h.slice(0, 16)].map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+  const u = new Uint8Array(buf);
+  let a = 0x811c9dc5, c = 0x01000193;
+  for (let i = 0; i < u.length; i++) { a = Math.imul(a ^ u[i], 16777619) >>> 0; c = Math.imul(c ^ u[i], 2246822519) >>> 0; }
+  return 'f' + a.toString(16) + c.toString(16) + u.length.toString(16);
+}
+async function blobToCanvas(b) {
+  const img = await loadImage(b);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  c.getContext('2d').drawImage(img, 0, 0);
+  freeImage(img);
+  return c;
+}
+const baseName = (n) => n.replace(/\.[^.]+$/, '');
+const libItem = (id) => state.lib.find((x) => x.id === id);
+
+async function restoreFromLib(r, it) {
+  r.src = await blobToCanvas(it.src);
+  r.cut = it.cut ? await blobToCanvas(it.cut) : null;
+  r.erase = it.erase ? await blobToCanvas(it.erase) : null;
+  r.face = it.face || null;
+  r.crop = { ...it.crop }; r.cropEdited = true;
+  r.bg = { ...it.bg }; r.style = { ...defaultStyle(), ...it.style }; r.adj = { ...defaultAdj(), ...it.adj };
+  r.name = it.name;
+  r.thumb = coverThumb(r.src, 200);
+  r.rev++; r.patch = null; r.view = null;
+  r.ready = true;
+  updatePreview(r);
+  r.savedRev = r.rev;
+}
+
+const libQueue = new Map(); // évite deux écritures simultanées d'une même image
+function libSave(r) {
+  if (!r.ready || r.error || !r.hash || r.savedRev === r.rev) return Promise.resolve();
+  const prevJob = libQueue.get(r.hash) || Promise.resolve();
+  const job = prevJob.then(async () => {
+    if (r.savedRev === r.rev) return;
+    const rev = r.rev, prev = libItem(r.hash);
+    const item = {
+      id: r.hash,
+      name: prev ? prev.name : baseName(r.name),
+      created: prev ? prev.created : Date.now(),
+      updated: Date.now(),
+      src: prev ? prev.src : await toBlob(r.src, 'image/jpeg', 0.92),
+      cut: r.bg.mode !== 'none' && r.cut ? await toBlob(r.cut, 'image/png') : null,
+      erase: r.erase ? await toBlob(r.erase, 'image/png') : null,
+      crop: { ...r.crop }, bg: { ...r.bg }, style: { ...r.style }, adj: { ...r.adj }, face: r.face,
+      thumb: r.preview,
+    };
+    await LIB.put(item);
+    state.lib = state.lib.filter((x) => x.id !== item.id).concat(item);
+    r.savedRev = rev; r.name = item.name;
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    renderLib();
+    return !prev;
+  }).catch((err) => { console.error(err); toast('Bibliothèque : enregistrement impossible (' + err.message + ').'); });
+  libQueue.set(r.hash, job);
+  return job;
+}
+// Seules les images réellement posées sur les photos enregistrées vont dans la bibliothèque.
+async function libSaveForPhotos(photos) {
+  const ids = new Set(photos.map((p) => p.id));
+  const repls = new Set();
+  for (const f of state.faces) {
+    if (!ids.has(f.photoId) || fadjOf(f).hidden) continue;
+    const r = replFor(f);
+    if (r) repls.add(r);
+  }
+  const res = await Promise.all([...repls].map(libSave));
+  const added = res.filter((x) => x === true).length;
+  if (added) toast(`${added} image${added > 1 ? 's' : ''} ajoutée${added > 1 ? 's' : ''} à la bibliothèque.`);
+}
+
+function useLib(it) {
+  const have = state.repls.find((r) => r.hash === it.id);
+  if (have) { toast(`« ${it.name} » est déjà dans la liste.`); return; }
+  const r = {
+    id: nid('r'), file: it.src, name: it.name, hash: it.id, thumb: it.thumb, preview: it.thumb, src: null, face: null,
+    crop: null, cropEdited: true, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
+    style: defaultStyle(), adj: defaultAdj(),
+  };
+  state.repls.push(r);
+  replChain = replChain.then(() => prepareRepl(r));
+  renderRepls(); renderLib();
+}
+async function renameLib(id, name) {
+  const it = libItem(id);
+  name = name.trim();
+  if (!it || !name || name === it.name) { renderLib(); return; }
+  const next = { ...it, name, updated: it.updated };
+  await LIB.put(next);
+  state.lib = state.lib.map((x) => (x.id === id ? next : x));
+  state.repls.forEach((r) => { if (r.hash === id) r.name = name; });
+  renderLib(); renderRepls(); renderGroups();
+}
+async function deleteLib(it) {
+  if (!confirm(`Retirer « ${it.name} » de la bibliothèque ?\nL'image reste dans la liste en cours si elle y est.`)) return;
+  await LIB.del(it.id);
+  state.lib = state.lib.filter((x) => x.id !== it.id);
+  state.repls.forEach((r) => { if (r.hash === it.id) r.savedRev = undefined; });
+  renderLib();
+}
+
+const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+function renderLib() {
+  const box = $('#lib-list');
+  if (box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return; // ne pas gêner la saisie
+  const words = norm($('#lib-q').value.trim()).split(/\s+/).filter(Boolean);
+  const items = state.lib
+    .filter((it) => words.every((w) => norm(it.name).includes(w)))
+    .sort((a, b) => b.updated - a.updated);
+  $('#lib-count').textContent = state.lib.length ? String(state.lib.length) : '';
+  $('#lib-q').hidden = state.lib.length < 2;
+  $('#lib-export').disabled = !state.lib.length;
+  let empty = null;
+  if (state.libError) empty = 'La bibliothèque n\'est pas disponible dans ce navigateur (navigation privée ?).';
+  else if (!state.lib.length) empty = 'Vide pour l\'instant. Les images posées sur des photos que tu enregistres y sont gardées, avec leur recadrage, détourage et gomme.';
+  else if (!items.length) empty = 'Aucune image ne porte ce nom.';
+  box.replaceChildren(...(empty ? [el('p', { class: 'pane-hint', text: empty })] : items.map((it) => {
+    const inSession = state.repls.some((r) => r.hash === it.id);
+    return el('div', { class: 'lib-item' + (inSession ? ' on' : '') },
+      el('button', { class: 'lib-use checker', title: inSession ? 'Déjà dans la liste' : 'Utiliser', 'aria-label': 'Utiliser ' + it.name, onclick: () => useLib(it) },
+        el('img', { src: it.thumb, alt: '' }),
+        inSession ? el('span', { class: 'tag', text: 'utilisée' }) : null),
+      el('input', {
+        class: 'lib-name', value: it.name, 'aria-label': 'Nom de l\'image', enterkeyhint: 'done',
+        onchange: (e) => renameLib(it.id, e.target.value),
+        onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+        onblur: () => setTimeout(renderLib, 0),
+      }),
+      el('button', { class: 'x', text: '×', 'aria-label': 'Retirer ' + it.name + ' de la bibliothèque', onclick: () => deleteLib(it) }));
+  })));
+}
+
+/* Sauvegarde / restauration de la bibliothèque dans un fichier (pour la ranger dans un dossier de Fichiers) */
+const blobToDataURL = (b) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(b); });
+const dataURLToBlob = async (u) => (u ? (await fetch(u)).blob() : null);
+async function exportLib() {
+  const items = [];
+  for (const it of state.lib) {
+    items.push({ ...it, src: await blobToDataURL(it.src), cut: it.cut && await blobToDataURL(it.cut), erase: it.erase && await blobToDataURL(it.erase) });
+  }
+  const json = JSON.stringify({ format: 'pfp-modifier-bibliotheque', version: 1, items });
+  const day = new Date().toISOString().slice(0, 10);
+  return [new File([json], `pfp-bibliotheque-${day}.json`, { type: 'application/json' })];
+}
+async function importLib(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.format !== 'pfp-modifier-bibliotheque' || !Array.isArray(data.items)) throw new Error('ce n\'est pas une sauvegarde de bibliothèque');
+    let added = 0, updated = 0;
+    for (const raw of data.items) {
+      const prev = libItem(raw.id);
+      if (prev && prev.updated >= raw.updated) continue;
+      const it = { ...raw, src: await dataURLToBlob(raw.src), cut: await dataURLToBlob(raw.cut), erase: await dataURLToBlob(raw.erase) };
+      await LIB.put(it);
+      state.lib = state.lib.filter((x) => x.id !== it.id).concat(it);
+      if (prev) updated++; else added++;
+    }
+    renderLib();
+    toast(`Bibliothèque importée : ${added} ajoutée${added > 1 ? 's' : ''}, ${updated} mise${updated > 1 ? 's' : ''} à jour.`);
+  } catch (err) {
+    console.error(err);
+    toast('Import impossible : ' + err.message);
+  }
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
+}
+
 /* ---------- UI ---------- */
 function setStatus(msg, pct) {
   const s = $('#status');
@@ -1218,6 +1459,7 @@ function renderRepls() {
   }));
   $('#repl-count').textContent = state.repls.length ? String(state.repls.length) : '';
   $('#repl-hint').hidden = !state.repls.some((r) => r.ready);
+  renderLib();
 }
 
 function faceButton(f) {
@@ -1329,6 +1571,10 @@ $('#btn-detect').addEventListener('click', detect);
 $('#threshold').addEventListener('input', (e) => { state.threshold = +e.target.value; $('#threshold-out').textContent = state.threshold.toFixed(2); });
 $('#btn-regroup').addEventListener('click', regroupAll);
 
+$('#lib-q').addEventListener('input', renderLib);
+$('#lib-export').addEventListener('click', (e) => saveWithButton(e.currentTarget, exportLib, 'Sauvegarder dans Fichiers'));
+$('#lib-import').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importLib(f); });
+
 $('#sel-new').addEventListener('click', () => moveSelected('new'));
 $('#sel-ignore').addEventListener('click', () => moveSelected('ignored'));
 $('#sel-clear').addEventListener('click', () => { state.selected.clear(); renderGroups(); });
@@ -1352,12 +1598,19 @@ $('#outline').addEventListener('change', (e) => { state.settings.outline = e.tar
 $('#btn-save-all').addEventListener('click', (e) => {
   const btn = e.currentTarget;
   const photos = state.photos.filter((p) => state.results.has(p.id));
-  saveWithButton(btn, () => buildFiles(photos), `Tout enregistrer (${photos.length})`);
+  saveWithButton(btn, async () => {
+    const files = await buildFiles(photos);
+    libSaveForPhotos(photos);
+    return files;
+  }, `Tout enregistrer (${photos.length})`);
 });
 
 $('#viewer-close').addEventListener('click', closeViewer);
 $('#viewer-save').addEventListener('click', async () => {
-  if (viewer.fullFile) await deliver([viewer.fullFile]);
+  if (!viewer.fullFile) return;
+  const p = viewer.photo;
+  libSaveForPhotos([p]);
+  await deliver([viewer.fullFile]);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
