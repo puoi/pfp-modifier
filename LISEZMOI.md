@@ -48,14 +48,19 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
      raccourcis « Centrer sur le visage », « Carré central », « Image entière » ;
    - **retirer l'arrière-plan** : « auto » (IA U²-Net, sujet principal : personne, animal, objet)
      ou « fond uni » (logos, fonds d'une seule couleur, avec un curseur de tolérance).
+   - **miroir** ;
+   - **forme et taille propres à cette image** (sinon elle suit l'étape 3), contour oui / non ;
+   - **retouches** : luminosité, contraste, saturation.
 2. **Les personnes** : « Détecter les visages ». Les visages sont regroupés par personne (deux visages
    d'une même photo ne sont jamais mis ensemble).
    - Touche des visages pour les sélectionner, puis « Nouvelle personne », « Déplacer vers… » ou « Ignorer ».
    - « Fusionner avec… » réunit deux personnes.
    - Le curseur « Regroupement » puis « Regrouper à nouveau » refait tout le regroupement (les corrections manuelles sont perdues).
    - Choisis l'image de remplacement de chaque personne.
-3. **Le rendu** : forme (ovale, rond, carré arrondi, carré, ou « Libre » sans découpe, idéal avec une image détourée),
+3. **Le rendu** : forme (ovale, rond, carré arrondi, carré, hexagone, étoile, cœur, ou « Libre » sans découpe, idéal avec une image détourée),
    taille, inclinaison, contour (avec « Libre » + image détourée, le contour suit la silhouette, façon sticker).
-4. **Résultats** : aperçus en direct, export en pleine résolution.
+4. **Résultats** : aperçus en direct, export en pleine résolution. « Ajuster » sur une photo permet de régler
+   chaque visage à la main : glisser pour déplacer, pincer / molette / curseurs pour la taille et l'angle,
+   « Ne pas remplacer ce visage » pour le laisser intact sur cette photo.
 
 Des photos ajoutées plus tard sont rattachées aux personnes existantes sans perdre tes corrections.

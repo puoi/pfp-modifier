@@ -142,6 +142,7 @@ function addRepls(files) {
     const r = {
       id: nid('r'), file, name: file.name, thumb: null, preview: null, src: null, face: null,
       crop: null, cropEdited: false, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
+      style: defaultStyle(), adj: defaultAdj(),
     };
     state.repls.push(r);
     replChain = replChain.then(() => prepareRepl(r));
@@ -177,6 +178,29 @@ async function prepareRepl(r) {
   r.patch = null;
   if (r.ready) updatePreview(r);
   renderRepls(); renderGroups(); scheduleRender();
+}
+// Réglages propres à chaque image de remplacement ('global' = suivre l'étape 3)
+const defaultStyle = () => ({ shape: 'global', size: 1, outline: 'global', flip: false });
+const defaultAdj = () => ({ bright: 0, contrast: 0, sat: 0 });
+const adjIsNeutral = (a) => !a.bright && !a.contrast && !a.sat;
+// Retouches (luminosité, contraste, saturation) appliquées pixel par pixel : fonctionne partout, y compris vieux Safari.
+function adjustCanvas(src, a) {
+  if (adjIsNeutral(a)) return src;
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0);
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  const C = a.contrast * 1.28, cf = (259 * (C + 255)) / (255 * (259 - C));
+  const b = a.bright * 0.96, sf = 1 + a.sat / 100;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i], g = d[i + 1], bl = d[i + 2];
+    const gray = 0.299 * r + 0.587 * g + 0.114 * bl;
+    r = gray + (r - gray) * sf; g = gray + (g - gray) * sf; bl = gray + (bl - gray) * sf;
+    d[i] = (r - 128) * cf + 128 + b; d[i + 1] = (g - 128) * cf + 128 + b; d[i + 2] = (bl - 128) * cf + 128 + b;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
 }
 // 'auto' = visage s'il y en a un, sinon carré central ; 'face' ; 'full' = image entière visible
 function defaultCrop(r, kind) {
@@ -375,12 +399,18 @@ function mergeGroups(intoId, fromId) {
 }
 
 /* ---------- Rendu ---------- */
-const replSource = (r) => (r.bg.mode !== 'none' && r.cut ? r.cut : r.src);
+const rawSource = (r) => (r.bg.mode !== 'none' && r.cut ? r.cut : r.src);
+function replSource(r) {
+  if (r.view && r.viewKey === r.rev) return r.view;
+  r.view = adjustCanvas(rawSource(r), r.adj); r.viewKey = r.rev;
+  return r.view;
+}
 // Dessine le cadrage d'une image de remplacement dans un carré de N px.
-function drawCrop(ctx, src, crop, N) {
+function drawCrop(ctx, src, crop, N, flip) {
   ctx.save();
   ctx.translate(N / 2, N / 2);
   ctx.scale(N / crop.size, N / crop.size);
+  if (flip) ctx.scale(-1, 1);
   ctx.rotate(-crop.angle);
   ctx.drawImage(src, -crop.cx, -crop.cy);
   ctx.restore();
@@ -392,7 +422,7 @@ function getPatch(r, sticker) {
   const N = 768;
   const base = document.createElement('canvas');
   base.width = base.height = N;
-  drawCrop(base.getContext('2d'), replSource(r), r.crop, N);
+  drawCrop(base.getContext('2d'), replSource(r), r.crop, N, r.style.flip);
   let c = base;
   if (sticker) {
     const sil = document.createElement('canvas');
@@ -433,6 +463,25 @@ function addShape(ctx, shape, s) {
     ctx.arcTo(h, -h, h, h, rr); ctx.arcTo(h, h, -h, h, rr);
     ctx.arcTo(-h, h, -h, -h, rr); ctx.arcTo(-h, -h, h, -h, rr);
     ctx.closePath();
+  } else if (shape === 'hexagon') {
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 3;
+      ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * h, Math.sin(a) * h);
+    }
+    ctx.closePath();
+  } else if (shape === 'star') {
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 5, rad = i % 2 ? h * 0.5 : h;
+      ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rad, Math.sin(a) * rad + h * 0.06);
+    }
+    ctx.closePath();
+  } else if (shape === 'heart') {
+    ctx.moveTo(0, -h * 0.5);
+    ctx.bezierCurveTo(h * 0.12, -h * 0.98, h * 1.02, -h * 0.98, h * 0.98, -h * 0.32);
+    ctx.bezierCurveTo(h * 0.95, h * 0.2, h * 0.38, h * 0.55, 0, h * 0.95);
+    ctx.bezierCurveTo(-h * 0.38, h * 0.55, -h * 0.95, h * 0.2, -h * 0.98, -h * 0.32);
+    ctx.bezierCurveTo(-h * 1.02, -h * 0.98, -h * 0.12, -h * 0.98, 0, -h * 0.5);
+    ctx.closePath();
   } else ctx.rect(-h, -h, s, s);
 }
 const replFor = (f) => {
@@ -440,54 +489,75 @@ const replFor = (f) => {
   const r = g && g.replId && state.repls.find((x) => x.id === g.replId);
   return r && r.ready ? r : null;
 };
+const NO_FADJ = { dx: 0, dy: 0, k: 1, rot: 0, hidden: false };
+const fadjOf = (f) => f.adj || NO_FADJ;
+const effShape = (r) => (r.style.shape === 'global' ? state.settings.shape : r.style.shape);
+const effOutline = (r) => (r.style.outline === 'global' ? state.settings.outline : r.style.outline === 'on');
+const hasRepl = (p) => state.faces.some((f) => f.photoId === p.id && replFor(f));
 function photoSig(p) {
   const st = state.settings;
   const parts = state.faces.filter((f) => f.photoId === p.id).map((f) => {
-    const r = replFor(f);
-    return r ? `${f.id}:${r.id}:${r.rev}` : '';
+    const r = replFor(f), a = fadjOf(f);
+    if (!r || a.hidden) return '';
+    return `${f.id}:${r.id}:${r.rev}:${a.dx.toFixed(4)}:${a.dy.toFixed(4)}:${a.k.toFixed(4)}:${a.rot.toFixed(4)}`;
   }).filter(Boolean);
   if (!parts.length) return '';
   return `${st.shape}|${st.scale}|${st.rotate}|${st.outline}|${parts.join(',')}`;
+}
+// Position, taille et angle d'un visage remplacé, en pixels du canvas (k = échelle canvas / photo).
+function faceGeom(f, r, k) {
+  const st = state.settings, a = fadjOf(f);
+  const fs = Math.max(f.box.w, f.box.h);
+  return {
+    x: (f.box.x + f.box.w / 2 + a.dx * fs) * k,
+    y: (f.box.y + f.box.h / 2 + a.dy * fs) * k,
+    s: fs * st.scale * r.style.size * a.k * k,
+    angle: (st.rotate ? f.angle : 0) + a.rot,
+  };
+}
+function drawFace(ctx, f, r, k) {
+  const { x, y, s, angle } = faceGeom(f, r, k);
+  const shape = effShape(r), outline = effOutline(r);
+  const free = shape === 'none';
+  const cutout = r.bg.mode !== 'none' && r.cut;
+  const patch = getPatch(r, free && outline && cutout);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  if (free) {
+    ctx.drawImage(patch, -s / 2, -s / 2, s, s);
+    if (outline && !cutout) {
+      ctx.lineWidth = Math.max(2, s * 0.03);
+      ctx.strokeStyle = '#fff';
+      ctx.strokeRect(-s / 2, -s / 2, s, s);
+    }
+  } else {
+    shapePath(ctx, shape, s);
+    ctx.save();
+    ctx.clip();
+    ctx.drawImage(patch, -s / 2, -s / 2, s, s);
+    ctx.restore();
+    if (outline) {
+      ctx.lineWidth = Math.max(2, s * 0.03);
+      ctx.strokeStyle = '#fff';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function drawFaces(ctx, p, k) {
+  for (const f of state.faces) {
+    if (f.photoId !== p.id || fadjOf(f).hidden) continue;
+    const r = replFor(f);
+    if (r) drawFace(ctx, f, r, k);
+  }
 }
 async function renderPhoto(p, full) {
   const img = await loadImage(full ? p.file : p.previewBlob);
   const c = fitCanvas(img, img.naturalWidth, img.naturalHeight, full ? Infinity : PREVIEW_SIDE);
   freeImage(img);
-  const k = c.width / p.w;
-  const ctx = c.getContext('2d');
-  const st = state.settings;
-  for (const f of state.faces) {
-    if (f.photoId !== p.id) continue;
-    const r = replFor(f);
-    if (!r) continue;
-    const free = st.shape === 'none';
-    const cutout = r.bg.mode !== 'none' && r.cut;
-    const patch = getPatch(r, free && st.outline && cutout);
-    const s = Math.max(f.box.w, f.box.h) * st.scale * k;
-    ctx.save();
-    ctx.translate((f.box.x + f.box.w / 2) * k, (f.box.y + f.box.h / 2) * k);
-    if (st.rotate) ctx.rotate(f.angle);
-    if (free) {
-      ctx.drawImage(patch, -s / 2, -s / 2, s, s);
-      if (st.outline && !cutout) {
-        ctx.lineWidth = Math.max(2, s * 0.03);
-        ctx.strokeStyle = '#fff';
-        ctx.strokeRect(-s / 2, -s / 2, s, s);
-      }
-    } else {
-      shapePath(ctx, st.shape, s);
-      ctx.save();
-      ctx.clip();
-      ctx.drawImage(patch, -s / 2, -s / 2, s, s);
-      ctx.restore();
-      if (st.outline) {
-        ctx.lineWidth = Math.max(2, s * 0.03);
-        ctx.strokeStyle = '#fff';
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  }
+  drawFaces(c.getContext('2d'), p, c.width / p.w);
   return toBlob(c, 'image/jpeg', full ? 0.93 : 0.85);
 }
 
@@ -572,19 +642,22 @@ async function saveWithButton(btn, getFiles, label) {
 
 /* ---------- Visionneuse ---------- */
 const viewer = { photo: null, fullFile: null, fullUrl: null, token: 0 };
-async function openViewer(id) {
+async function openViewer(id, edit) {
   const p = state.photos.find((x) => x.id === id);
   const r = state.results.get(id);
   if (!p) return;
   viewer.photo = p; viewer.fullFile = null;
   const token = ++viewer.token;
   if (viewer.fullUrl) { URL.revokeObjectURL(viewer.fullUrl); viewer.fullUrl = null; }
+  setFxMode(false);
   $('#viewer-img').src = r ? r.url : p.previewUrl;
+  $('#viewer-edit').hidden = !hasRepl(p);
   $('#viewer-save').hidden = !r;
   $('#viewer-save').textContent = 'Préparation…';
   $('#viewer-save').disabled = true;
   $('#viewer').hidden = false;
   document.body.style.overflow = 'hidden';
+  if (edit) { startFx(); return; }
   if (!r) return;
   try {
     const [file] = await buildFiles([p]);
@@ -600,14 +673,155 @@ async function openViewer(id) {
 }
 function closeViewer() {
   viewer.token++;
+  setFxMode(false);
   $('#viewer').hidden = true;
   document.body.style.overflow = '';
   if (viewer.fullUrl) { URL.revokeObjectURL(viewer.fullUrl); viewer.fullUrl = null; }
   $('#viewer-img').removeAttribute('src');
 }
 
+/* ---------- Ajustement visage par visage sur la photo finale ---------- */
+const fx = { on: false, base: null, k: 1, sel: null, pointers: new Map() };
+function setFxMode(on) {
+  fx.on = on;
+  $('#viewer-img').hidden = on;
+  $('#viewer-canvas').hidden = !on;
+  $('#viewer-bar').hidden = on;
+  $('#fx-bar').hidden = !on;
+  if (!on) { fx.base = null; fx.sel = null; fx.pointers.clear(); }
+}
+const fxFaces = () => state.faces.filter((f) => f.photoId === viewer.photo.id && replFor(f));
+async function startFx() {
+  const p = viewer.photo;
+  const token = ++viewer.token;
+  if (viewer.fullUrl) { URL.revokeObjectURL(viewer.fullUrl); viewer.fullUrl = null; }
+  viewer.fullFile = null;
+  setFxMode(true);
+  const img = await loadImage(p.previewBlob);
+  if (token !== viewer.token) { freeImage(img); return; }
+  fx.base = fitCanvas(img, img.naturalWidth, img.naturalHeight, PREVIEW_SIDE);
+  freeImage(img);
+  fx.k = fx.base.width / p.w;
+  const cv = $('#viewer-canvas');
+  cv.width = fx.base.width; cv.height = fx.base.height;
+  const faces = fxFaces();
+  fx.sel = faces.length === 1 ? faces[0] : null;
+  syncFx(); drawFx();
+}
+function drawFx() {
+  if (!fx.on || !fx.base) return;
+  const cv = $('#viewer-canvas'), ctx = cv.getContext('2d');
+  ctx.drawImage(fx.base, 0, 0);
+  drawFaces(ctx, viewer.photo, fx.k);
+  const u = cv.width / Math.max(1, cv.getBoundingClientRect().width); // 1 px écran, en px canvas
+  for (const f of fxFaces()) {
+    const g = faceGeom(f, replFor(f), fx.k), hidden = fadjOf(f).hidden, sel = f === fx.sel;
+    ctx.save();
+    ctx.translate(g.x, g.y); ctx.rotate(g.angle);
+    if (hidden) { ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(-g.s / 2, -g.s / 2, g.s, g.s); }
+    ctx.lineWidth = (sel ? 3 : 1.5) * u;
+    ctx.setLineDash(sel ? [] : [6 * u, 5 * u]);
+    ctx.strokeStyle = sel ? '#ffd166' : 'rgba(255,255,255,.85)';
+    ctx.strokeRect(-g.s / 2, -g.s / 2, g.s, g.s);
+    ctx.restore();
+  }
+}
+function syncFx() {
+  const f = fx.sel, a = f ? fadjOf(f) : null;
+  $('#fx-controls').style.visibility = f ? '' : 'hidden';
+  $('#fx-hint').textContent = f
+    ? 'Glisse pour déplacer · pince ou molette pour la taille et l\'angle.'
+    : 'Touche un visage remplacé pour le régler.';
+  if (!f) return;
+  $('#fx-size').value = Math.log2(a.k);
+  $('#fx-size-out').textContent = Math.round(a.k * 100) + ' %';
+  const deg = Math.round((a.rot * 180) / Math.PI);
+  $('#fx-rot').value = deg;
+  $('#fx-rot-out').textContent = deg + '°';
+  $('#fx-hide').textContent = a.hidden ? 'Remettre ce visage' : 'Ne pas remplacer ce visage';
+}
+function editAdj(f, fn) {
+  if (!f.adj) f.adj = { ...NO_FADJ };
+  fn(f.adj);
+  f.adj.k = Math.min(4, Math.max(0.25, f.adj.k));
+  f.adj.rot = Math.atan2(Math.sin(f.adj.rot), Math.cos(f.adj.rot));
+  syncFx(); drawFx();
+}
+function fxPoint(e) {
+  const cv = $('#viewer-canvas'), rc = cv.getBoundingClientRect();
+  return { x: ((e.clientX - rc.left) / rc.width) * cv.width, y: ((e.clientY - rc.top) / rc.height) * cv.height };
+}
+function fxHit(pt) {
+  let best = null, bd = Infinity;
+  for (const f of fxFaces()) {
+    const g = faceGeom(f, replFor(f), fx.k);
+    const d = Math.hypot(pt.x - g.x, pt.y - g.y);
+    if (d < g.s * 0.6 && d < bd) { bd = d; best = f; }
+  }
+  return best;
+}
+async function finishFx() {
+  const p = viewer.photo;
+  setFxMode(false);
+  const sig = photoSig(p), cur = state.results.get(p.id);
+  if (sig && (!cur || cur.sig !== sig)) {
+    const blob = await renderPhoto(p, false);
+    const old = state.results.get(p.id);
+    if (old) URL.revokeObjectURL(old.url);
+    state.results.set(p.id, { sig, url: URL.createObjectURL(blob) });
+  } else if (!sig && cur) {
+    URL.revokeObjectURL(cur.url); state.results.delete(p.id);
+  }
+  drawResultsGrid();
+  if (!$('#viewer').hidden) openViewer(p.id);
+}
+(function wireFx() {
+  const cv = $('#viewer-canvas');
+  cv.addEventListener('pointerdown', (e) => {
+    if (!fx.base) return;
+    cv.setPointerCapture(e.pointerId);
+    const pt = fxPoint(e);
+    fx.pointers.set(e.pointerId, pt);
+    if (fx.pointers.size === 1) {
+      const hit = fxHit(pt);
+      if (hit !== fx.sel) { fx.sel = hit; syncFx(); drawFx(); }
+    }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!fx.pointers.has(e.pointerId) || !fx.sel) return;
+    const before = [...fx.pointers.values()].map((p) => ({ ...p }));
+    fx.pointers.set(e.pointerId, fxPoint(e));
+    const after = [...fx.pointers.values()];
+    const fs = Math.max(fx.sel.box.w, fx.sel.box.h) * fx.k;
+    editAdj(fx.sel, (a) => {
+      if (after.length === 1) {
+        a.dx += (after[0].x - before[0].x) / fs; a.dy += (after[0].y - before[0].y) / fs;
+      } else {
+        const [a0, b0] = before, [a1, b1] = after;
+        a.dx += (a1.x + b1.x - a0.x - b0.x) / 2 / fs; a.dy += (a1.y + b1.y - a0.y - b0.y) / 2 / fs;
+        const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y), d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+        if (d0 > 0 && d1 > 0) a.k *= d1 / d0;
+        a.rot += Math.atan2(b1.y - a1.y, b1.x - a1.x) - Math.atan2(b0.y - a0.y, b0.x - a0.x);
+      }
+    });
+  });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => fx.pointers.delete(e.pointerId)));
+  cv.addEventListener('wheel', (e) => {
+    if (!fx.sel) return;
+    e.preventDefault();
+    editAdj(fx.sel, (a) => { a.k *= Math.exp(-e.deltaY * 0.0015); });
+  }, { passive: false });
+  $('#fx-size').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.k = Math.pow(2, +e.target.value); }); });
+  $('#fx-rot').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.rot = (+e.target.value * Math.PI) / 180; }); });
+  $('#fx-hide').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.hidden = !a.hidden; }); });
+  $('#fx-reset').addEventListener('click', () => { if (fx.sel) { fx.sel.adj = null; syncFx(); drawFx(); } });
+  $('#fx-done').addEventListener('click', finishFx);
+  $('#viewer-edit').addEventListener('click', () => { if (viewer.photo) startFx(); });
+  window.addEventListener('resize', drawFx);
+})();
+
 /* ---------- Éditeur de cadrage / détourage ---------- */
-const ed = { r: null, crop: null, bg: null, cut: null, cuts: new Map(), pointers: new Map(), token: 0 };
+const ed = { r: null, crop: null, bg: null, cut: null, style: null, adj: null, view: null, viewKey: '', cuts: new Map(), pointers: new Map(), token: 0 };
 const BG_LABELS = { auto: 'Détourage du sujet…', flat: 'Retrait du fond uni…' };
 const sizeBounds = (r) => { const m = Math.max(r.src.width, r.src.height); return [m * 0.04, m * 3]; };
 
@@ -618,6 +832,9 @@ function openEditor(id) {
   ed.crop = { ...r.crop };
   ed.bg = { ...r.bg };
   ed.cut = r.cut;
+  ed.style = { ...r.style };
+  ed.adj = { ...r.adj };
+  ed.view = null;
   ed.cuts = new Map();
   if (r.cut) ed.cuts.set(cutKey(r.bg), r.cut);
   ed.pointers.clear();
@@ -650,6 +867,22 @@ function syncEditorControls() {
   $('#ed-bgmode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.bg.mode));
   $('#ed-tol-row').hidden = ed.bg.mode !== 'flat';
   $('#ed-tol-out').textContent = ed.bg.tol;
+  $('#ed-shape').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.style.shape));
+  $('#ed-outline').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === ed.style.outline));
+  $('#ed-size').value = ed.style.size;
+  $('#ed-size-out').textContent = Math.round(ed.style.size * 100) + ' %';
+  $('#ed-flip').setAttribute('aria-pressed', ed.style.flip ? 'true' : 'false');
+  for (const k of ['bright', 'contrast', 'sat']) {
+    $('#ed-' + k).value = ed.adj[k];
+    $('#ed-' + k + '-out').textContent = (ed.adj[k] > 0 ? '+' : '') + ed.adj[k];
+  }
+}
+function editorSource() {
+  const raw = ed.bg.mode !== 'none' && ed.cut ? ed.cut : ed.r.src;
+  const key = `${ed.adj.bright}|${ed.adj.contrast}|${ed.adj.sat}`;
+  if (ed.view && ed.viewRaw === raw && ed.viewKey === key) return ed.view;
+  ed.view = adjustCanvas(raw, ed.adj); ed.viewRaw = raw; ed.viewKey = key;
+  return ed.view;
 }
 
 function drawEditor() {
@@ -663,13 +896,13 @@ function drawEditor() {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, C, C);
   const F = C * 0.72;
-  const src = ed.bg.mode !== 'none' && ed.cut ? ed.cut : ed.r.src;
   ctx.save();
   ctx.translate((C - F) / 2, (C - F) / 2);
-  drawCrop(ctx, src, ed.crop, F);
+  drawCrop(ctx, editorSource(), ed.crop, F, ed.style.flip);
   ctx.restore();
-  // voile en dehors de la forme choisie à l'étape 3
-  const shape = state.settings.shape === 'none' ? 'square' : state.settings.shape;
+  // voile en dehors de la forme qui sera utilisée sur la photo
+  const eff = ed.style.shape === 'global' ? state.settings.shape : ed.style.shape;
+  const shape = eff === 'none' ? 'square' : eff;
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, C, C);
@@ -681,7 +914,7 @@ function drawEditor() {
   addShape(ctx, shape, F);
   ctx.lineWidth = 2 * dpr;
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-  if (state.settings.shape === 'none') ctx.setLineDash([8 * dpr, 6 * dpr]);
+  if (eff === 'none') ctx.setLineDash([8 * dpr, 6 * dpr]);
   ctx.stroke();
   ctx.restore();
 }
@@ -695,6 +928,7 @@ function panBy(dx, dy) {
   const cv = $('#ed-canvas');
   const F = cv.clientWidth * 0.72;
   const s = F / ed.crop.size, a = ed.crop.angle;
+  if (ed.style.flip) dx = -dx;
   ed.crop.cx -= (dx * Math.cos(a) - dy * Math.sin(a)) / s;
   ed.crop.cy -= (dx * Math.sin(a) + dy * Math.cos(a)) / s;
 }
@@ -735,8 +969,10 @@ function applyEditor() {
   r.cropEdited = true;
   r.bg = { ...ed.bg };
   r.cut = ed.bg.mode !== 'none' ? ed.cut : null;
+  r.style = { ...ed.style };
+  r.adj = { ...ed.adj };
   r.rev++;
-  r.patch = null;
+  r.patch = null; r.view = null;
   updatePreview(r);
   closeEditor();
   renderRepls(); renderGroups(); scheduleRender();
@@ -761,7 +997,7 @@ function applyEditor() {
       const t0 = Math.atan2(b0.y - a0.y, b0.x - a0.x), t1 = Math.atan2(b1.y - a1.y, b1.x - a1.x);
       panBy((a1.x + b1.x - a0.x - b0.x) / 2, (a1.y + b1.y - a0.y - b0.y) / 2);
       if (d0 > 0 && d1 > 0) ed.crop.size *= d0 / d1;
-      ed.crop.angle -= t1 - t0;
+      ed.crop.angle -= (t1 - t0) * (ed.style.flip ? -1 : 1);
       clampSize();
     }
     syncEditorControls();
@@ -797,6 +1033,24 @@ function applyEditor() {
     clearTimeout(tolTimer);
     tolTimer = setTimeout(() => setEditorBg('flat', +e.target.value), 200);
   });
+  const segPick = (id, fn) => $(id).addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (b && ed.r) { fn(b.dataset.v); syncEditorControls(); drawEditor(); }
+  });
+  segPick('#ed-shape', (v) => { ed.style.shape = v; });
+  segPick('#ed-outline', (v) => { ed.style.outline = v; });
+  $('#ed-size').addEventListener('input', (e) => { ed.style.size = +e.target.value; syncEditorControls(); });
+  $('#ed-flip').addEventListener('click', () => { ed.style.flip = !ed.style.flip; syncEditorControls(); drawEditor(); });
+  let adjFrame = 0;
+  for (const k of ['bright', 'contrast', 'sat']) {
+    $('#ed-' + k).addEventListener('input', (e) => {
+      ed.adj[k] = +e.target.value;
+      syncEditorControls();
+      cancelAnimationFrame(adjFrame);
+      adjFrame = requestAnimationFrame(drawEditor);
+    });
+  }
+  $('#ed-adj-reset').addEventListener('click', () => { ed.adj = defaultAdj(); syncEditorControls(); drawEditor(); });
   $('#ed-cancel').addEventListener('click', closeEditor);
   $('#ed-ok').addEventListener('click', applyEditor);
   window.addEventListener('resize', () => { if (ed.r) drawEditor(); });
@@ -944,7 +1198,8 @@ function drawResultsGrid() {
       return el('figure', { class: 'result' + (changed ? '' : ' unchanged') },
         el('button', { class: 'frame', id: 'frame-' + p.id, 'aria-label': 'Agrandir ' + p.name, onclick: () => openViewer(p.id) },
           el('img', { src: r ? r.url : (p.previewUrl || p.thumb), alt: p.name, loading: 'lazy' })),
-        el('figcaption', {}, el('span', { text: changed ? p.name : 'Inchangée · ' + p.name })));
+        el('figcaption', {}, el('span', { text: changed ? p.name : 'Inchangée · ' + p.name }),
+          hasRepl(p) ? el('button', { class: 'btn small', text: 'Ajuster', 'aria-label': 'Ajuster les visages de ' + p.name, onclick: () => openViewer(p.id, true) }) : null));
     }));
   }
   updateButtons();
@@ -1003,6 +1258,7 @@ $('#viewer-save').addEventListener('click', async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('#editor').hidden) closeEditor();
+  else if (fx.on) finishFx();
   else if (!$('#viewer').hidden) closeViewer();
 });
 const showOrig = (on) => {

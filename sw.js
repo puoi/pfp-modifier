@@ -1,5 +1,5 @@
 /* Service worker : met toute l'app en cache pour qu'elle marche hors ligne. */
-const VERSION = 'pfp-v2';
+const VERSION = 'pfp-v3';
 const FILES = [
   './',
   'index.html',

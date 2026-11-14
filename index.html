@@ -215,9 +215,9 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .pane-hint { margin: 0; font-size: 12px; color: var(--muted); }
 .repl-row .adjust { align-self: center; margin-left: 4px; }
 
-.editor { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; place-items: center; overflow-y: auto;
+.editor { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; justify-items: center; overflow-y: auto;
   padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
-.ed-panel { width: 100%; max-width: 540px; background: var(--surface); border-radius: 18px; padding: 16px; display: grid; gap: 12px; }
+.ed-panel { margin: auto 0; width: 100%; max-width: 540px; background: var(--surface); border-radius: 18px; padding: 16px; display: grid; gap: 12px; }
 .ed-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .ed-head h3 { margin: 0; font: 600 19px/1.2 var(--font-display); }
 .ed-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
@@ -228,7 +228,20 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .ed-bg .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .ed-bg .seg button { font-size: 13px; padding: 7px 11px; }
 .ed-status { font-size: 13px; color: var(--accent); min-height: 1.2em; }
-.ed-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ed-actions { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; background: var(--surface); padding: 10px 0 4px; }
+.ed-sec { border-top: 1px solid var(--line); padding-top: 10px; }
+.ed-sec > summary { cursor: pointer; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; list-style: none; display: flex; justify-content: space-between; }
+.ed-sec > summary::-webkit-details-marker { display: none; }
+.ed-sec > summary::after { content: '+'; font: 500 15px/1 var(--font-mono); }
+.ed-sec[open] > summary::after { content: '−'; }
+.ed-sec > .in { display: grid; gap: 10px; padding-top: 10px; }
+.ed-sec .seg button { font-size: 13px; padding: 7px 11px; }
+.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.viewer .stage canvas { max-width: 100%; max-height: 100%; border-radius: 6px; touch-action: none; cursor: move; }
+.viewer .range-row { color: rgba(255,255,255,.8); flex-basis: 100%; max-width: 520px; }
+.viewer .range-row output { color: #fff; }
+.fx-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; flex-basis: 100%; }
+.result figcaption .btn.small { padding: 3px 10px; font-size: 12px; flex: none; }
 </style>
 </head>
 <body>
@@ -293,8 +306,12 @@ footer.foot { color: var(--muted); font-size: 12px; }
         <button data-v="circle">Rond</button>
         <button data-v="rounded">Carré arrondi</button>
         <button data-v="square">Carré</button>
+        <button data-v="hexagon">Hexagone</button>
+        <button data-v="star">Étoile</button>
+        <button data-v="heart">Cœur</button>
         <button data-v="none" title="Pas de découpe : idéal avec une image détourée">Libre</button>
       </div>
+      <p class="pane-hint">Réglages communs à toutes les images. Chaque image peut avoir sa propre forme et sa propre taille (« Ajuster l'image »), et chaque visage se règle à la main dans les résultats (« Ajuster »).</p>
       <div class="range-row">
         <label for="scale">Taille</label>
         <input type="range" id="scale" min="0.8" max="2.4" step="0.05" value="1.4">
@@ -330,8 +347,27 @@ footer.foot { color: var(--muted); font-size: 12px; }
 </div>
 
 <div class="viewer" id="viewer" hidden>
-  <div class="stage"><img id="viewer-img" alt="Aperçu"></div>
-  <div class="bar">
+  <div class="stage"><img id="viewer-img" alt="Aperçu"><canvas id="viewer-canvas" hidden aria-label="Photo : touche un visage, glisse pour le déplacer, pince pour la taille et l'angle"></canvas></div>
+  <div class="bar" id="fx-bar" hidden>
+    <p class="note" id="fx-hint"></p>
+    <div class="fx-controls" id="fx-controls" style="visibility:hidden">
+      <div class="range-row">
+        <label for="fx-size">Taille</label>
+        <input type="range" id="fx-size" min="-2" max="2" step="0.01" value="0">
+        <output id="fx-size-out">100 %</output>
+      </div>
+      <div class="range-row">
+        <label for="fx-rot">Angle</label>
+        <input type="range" id="fx-rot" min="-180" max="180" step="1" value="0">
+        <output id="fx-rot-out">0°</output>
+      </div>
+      <button class="btn small" id="fx-hide">Ne pas remplacer ce visage</button>
+      <button class="btn small" id="fx-reset">Réinitialiser</button>
+    </div>
+    <button class="btn primary" id="fx-done">Terminé</button>
+  </div>
+  <div class="bar" id="viewer-bar">
+    <button class="btn" id="viewer-edit">Ajuster les visages</button>
     <button class="btn" id="viewer-orig">Maintenir : original</button>
     <button class="btn primary" id="viewer-save">Enregistrer</button>
     <button class="btn" id="viewer-close">Fermer</button>
@@ -346,7 +382,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <span class="ed-name" id="ed-name"></span>
     </div>
     <canvas id="ed-canvas" class="ed-canvas" aria-label="Cadrage : glisser pour déplacer, pincer ou molette pour zoomer, deux doigts pour tourner"></canvas>
-    <p class="ed-tip">Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La forme affichée est celle de l'étape 3.</p>
+    <p class="ed-tip">Glisse pour déplacer · pince ou molette pour zoomer · tourne avec deux doigts. La zone claire est ce qui sera posé sur les visages.</p>
     <div class="range-row">
       <label for="ed-zoom">Zoom</label>
       <input type="range" id="ed-zoom" min="0" max="1" step="0.001" value="0.5">
@@ -361,8 +397,59 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <button class="btn small" id="ed-face">Centrer sur le visage</button>
       <button class="btn small" id="ed-center">Carré central</button>
       <button class="btn small" id="ed-full">Image entière</button>
+      <button class="btn small" id="ed-flip" aria-pressed="false">Miroir</button>
     </div>
-    <div class="ed-bg">
+    <details class="ed-sec" open>
+      <summary>Forme et taille sur la photo</summary>
+      <div class="in">
+        <div class="seg" id="ed-shape" role="group" aria-label="Forme de cette image">
+          <button data-v="global">Comme l'étape 3</button>
+          <button data-v="ellipse">Ovale</button>
+          <button data-v="circle">Rond</button>
+          <button data-v="rounded">Carré arrondi</button>
+          <button data-v="square">Carré</button>
+          <button data-v="hexagon">Hexagone</button>
+          <button data-v="star">Étoile</button>
+          <button data-v="heart">Cœur</button>
+          <button data-v="none">Libre</button>
+        </div>
+        <div class="range-row">
+          <label for="ed-size">Taille</label>
+          <input type="range" id="ed-size" min="0.4" max="2.5" step="0.05" value="1">
+          <output id="ed-size-out">100 %</output>
+        </div>
+        <div class="range-row">
+          <span>Contour blanc</span>
+          <div class="seg" id="ed-outline" role="group" aria-label="Contour blanc">
+            <button data-v="global">Comme l'étape 3</button>
+            <button data-v="on">Oui</button>
+            <button data-v="off">Non</button>
+          </div>
+        </div>
+      </div>
+    </details>
+    <details class="ed-sec">
+      <summary>Retouches</summary>
+      <div class="in">
+        <div class="range-row">
+          <label for="ed-bright">Luminosité</label>
+          <input type="range" id="ed-bright" min="-100" max="100" step="1" value="0">
+          <output id="ed-bright-out">0</output>
+        </div>
+        <div class="range-row">
+          <label for="ed-contrast">Contraste</label>
+          <input type="range" id="ed-contrast" min="-100" max="100" step="1" value="0">
+          <output id="ed-contrast-out">0</output>
+        </div>
+        <div class="range-row">
+          <label for="ed-sat">Saturation</label>
+          <input type="range" id="ed-sat" min="-100" max="100" step="1" value="0">
+          <output id="ed-sat-out">0</output>
+        </div>
+        <div><button class="btn small" id="ed-adj-reset">Réinitialiser les retouches</button></div>
+      </div>
+    </details>
+    <div class="ed-bg ed-sec">
       <span class="lbl">Arrière-plan</span>
       <div class="seg" id="ed-bgmode" role="group" aria-label="Arrière-plan">
         <button data-v="none">Garder</button>
