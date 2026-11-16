@@ -517,7 +517,7 @@ const replFor = (f) => {
   const r = g && g.replId && state.repls.find((x) => x.id === g.replId);
   return r && r.ready ? r : null;
 };
-const NO_FADJ = { dx: 0, dy: 0, k: 1, rot: 0, hidden: false };
+const NO_FADJ = { dx: 0, dy: 0, k: 1, rot: 0, hidden: false, flip: false };
 const fadjOf = (f) => f.adj || NO_FADJ;
 const effShape = (r) => (r.style.shape === 'global' ? state.settings.shape : r.style.shape);
 const effOutline = (r) => (r.style.outline === 'global' ? state.settings.outline : r.style.outline === 'on');
@@ -527,7 +527,7 @@ function photoSig(p) {
   const parts = state.faces.filter((f) => f.photoId === p.id).map((f) => {
     const r = replFor(f), a = fadjOf(f);
     if (!r || a.hidden) return '';
-    return `${f.id}:${r.id}:${r.rev}:${a.dx.toFixed(4)}:${a.dy.toFixed(4)}:${a.k.toFixed(4)}:${a.rot.toFixed(4)}`;
+    return `${f.id}:${r.id}:${r.rev}:${a.dx.toFixed(4)}:${a.dy.toFixed(4)}:${a.k.toFixed(4)}:${a.rot.toFixed(4)}:${a.flip ? 1 : 0}`;
   }).filter(Boolean);
   if (!parts.length) return '';
   return `${st.shape}|${st.scale}|${st.rotate}|${st.outline}|${parts.join(',')}`;
@@ -552,6 +552,7 @@ function drawFace(ctx, f, r, k) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle);
+  if (fadjOf(f).flip) ctx.scale(-1, 1); // miroir de ce visage seulement
   if (free) {
     ctx.drawImage(patch, -s / 2, -s / 2, s, s);
     if (outline && !cutout) {
@@ -766,6 +767,7 @@ function syncFx() {
   const deg = Math.round((a.rot * 180) / Math.PI);
   $('#fx-rot').value = deg;
   $('#fx-rot-out').textContent = deg + '°';
+  $('#fx-flip').setAttribute('aria-pressed', a.flip ? 'true' : 'false');
   $('#fx-hide').textContent = a.hidden ? 'Remettre ce visage' : 'Ne pas remplacer ce visage';
 }
 function editAdj(f, fn) {
@@ -841,6 +843,7 @@ async function finishFx() {
   }, { passive: false });
   $('#fx-size').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.k = Math.pow(2, +e.target.value); }); });
   $('#fx-rot').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.rot = (+e.target.value * Math.PI) / 180; }); });
+  $('#fx-flip').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.flip = !a.flip; }); });
   $('#fx-hide').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.hidden = !a.hidden; }); });
   $('#fx-reset').addEventListener('click', () => { if (fx.sel) { fx.sel.adj = null; syncFx(); drawFx(); } });
   $('#fx-done').addEventListener('click', finishFx);

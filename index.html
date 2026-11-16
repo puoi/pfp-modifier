@@ -195,6 +195,7 @@ progress::-moz-progress-bar { background: var(--accent); }
 .viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; -webkit-touch-callout: default; }
 .viewer .bar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 12px 16px calc(14px + env(safe-area-inset-bottom, 0px)); }
 .viewer .bar .btn { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.25); }
+.viewer .bar .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .viewer .bar .btn.primary { background: #fff; color: #141729; border-color: #fff; }
 .viewer .note { color: rgba(255,255,255,.7); font-size: 12px; text-align: center; flex-basis: 100%; margin: 0; }
 footer.foot { color: var(--muted); font-size: 12px; }
@@ -429,6 +430,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
         <input type="range" id="fx-rot" min="-180" max="180" step="1" value="0">
         <output id="fx-rot-out">0°</output>
       </div>
+      <button class="btn small" id="fx-flip" aria-pressed="false">Miroir</button>
       <button class="btn small" id="fx-hide">Ne pas remplacer ce visage</button>
       <button class="btn small" id="fx-reset">Réinitialiser</button>
     </div>
