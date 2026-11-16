@@ -238,6 +238,17 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .lib .toolbar .btn { position: relative; }
 .lib .toolbar input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .chk { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.pudgy { margin: 12px 0 4px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); display: grid; gap: 8px; }
+.pudgy h4 { margin: 0; font-size: 14px; }
+.pudgy-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pudgy-row .pill-select { flex: 0 1 auto; }
+.pudgy-row input { flex: 1 1 120px; min-width: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 7px 12px; font-size: 16px; color: var(--ink); }
+.pudgy-classics { display: flex; flex-wrap: wrap; gap: 6px; }
+.pudgy-classics .btn { display: inline-flex; align-items: center; gap: 6px; }
+.pudgy-classics .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(0,0,0,.25); }
+.pudgy .pane-hint { margin: 0; }
+.preset-box { border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 10px; display: grid; gap: 8px; }
+.preset-title { margin: 0; font-size: 13px; font-weight: 600; }
 .model-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .model-chip { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); }
 .model-chip button { border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--ink); }
@@ -300,6 +311,19 @@ footer.foot { color: var(--muted); font-size: 12px; }
           <input type="file" id="in-repls" accept="image/*" multiple>
           <span><strong>Choisir des images</strong> (photo de profil, logo, emoji…)</span>
         </label>
+        <div class="pudgy" id="pudgy">
+          <h4>Pudgy Penguins</h4>
+          <div class="pudgy-row">
+            <select id="pg-kind" class="pill-select" aria-label="Collection">
+              <option value="big">Big Pudgy</option>
+              <option value="lil">Lil Pudgy</option>
+            </select>
+            <input id="pg-num" type="text" inputmode="numeric" enterkeyhint="go" autocomplete="off" placeholder="N° (ex. 12 ou 12, 340)" aria-label="Numéro(s) du Pudgy">
+            <button class="btn small primary" id="pg-add">Ajouter</button>
+          </div>
+          <div class="pudgy-classics" id="pg-classics"></div>
+          <p class="pane-hint" id="pg-hint">Chaque Pudgy ajouté est préparé avec le preset de sa collection (tête seule, sans fond). Ajuste-le en touchant un Pudgy, puis « Enregistrer comme preset ».</p>
+        </div>
         <div class="range-row" id="auto-model-row" hidden>
           <label for="auto-model">Préparer les nouvelles images</label>
           <select id="auto-model" class="pill-select"></select>
@@ -488,6 +512,14 @@ footer.foot { color: var(--muted); font-size: 12px; }
     <details class="ed-sec" id="ed-models-sec">
       <summary>Modèles de découpe</summary>
       <div class="in">
+        <div class="preset-box" id="ed-preset" hidden>
+          <p class="preset-title" id="ed-preset-title"></p>
+          <div class="toolbar">
+            <button class="btn small primary" id="ed-preset-save"></button>
+            <button class="btn small" id="ed-preset-apply">Appliquer le preset</button>
+            <button class="btn small" id="ed-preset-reset">Preset d'origine</button>
+          </div>
+        </div>
         <div class="model-list" id="ed-models"></div>
         <div class="model-save">
           <input id="ed-mname" placeholder="Nom du modèle (ex. Penguin)" aria-label="Nom du modèle" enterkeyhint="done">

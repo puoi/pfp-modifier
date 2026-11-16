@@ -136,7 +136,7 @@ function removePhoto(id) {
 
 /* ---------- Remplacements ---------- */
 let replChain = Promise.resolve();
-function addRepls(files) {
+function addRepls(files, extra = null) {
   for (const file of files) {
     if (!isImage(file)) continue;
     const r = {
@@ -144,6 +144,7 @@ function addRepls(files) {
       crop: null, cropEdited: false, bg: { mode: 'none', tol: 30 }, cut: null, rev: 0, ready: false, error: null,
       style: defaultStyle(), adj: defaultAdj(), collar: defaultCollar(),
     };
+    if (extra) Object.assign(r, extra);
     state.repls.push(r);
     replChain = replChain.then(() => prepareRepl(r));
   }
@@ -174,7 +175,7 @@ async function prepareRepl(r) {
     freeImage(img);
     r.thumb = coverThumb(r.src, 200);
     r.crop = defaultCrop(r, 'auto');
-    const am = autoModel();
+    const am = r.pudgy ? pudgyPreset(r.pudgy.kind) : autoModel();
     if (am) await applyModelToRepl(r, am);
     r.ready = true;
     updatePreview(r);
@@ -1336,6 +1337,7 @@ async function restoreFromLib(r, it) {
   r.crop = { ...it.crop }; r.cropEdited = true;
   r.bg = { ...it.bg }; r.style = { ...defaultStyle(), ...it.style }; r.adj = { ...defaultAdj(), ...it.adj };
   r.collar = { ...defaultCollar(), ...it.collar };
+  if (it.pudgy) r.pudgy = { ...it.pudgy };
   r.name = it.name;
   r.thumb = coverThumb(r.src, 200);
   r.rev++; r.patch = null; r.view = null;
@@ -1360,6 +1362,7 @@ function libSave(r) {
       cut: r.bg.mode !== 'none' && r.cut ? await toBlob(r.cut, 'image/png') : null,
       erase: r.erase ? await toBlob(r.erase, 'image/png') : null,
       crop: { ...r.crop }, bg: { ...r.bg }, style: { ...r.style }, adj: { ...r.adj }, collar: { ...r.collar }, face: r.face,
+      pudgy: r.pudgy || (prev && prev.pudgy) || null,
       thumb: r.preview,
     };
     await LIB.put(item);
@@ -1549,7 +1552,7 @@ LIB.allModels()
   .then(() => { renderModels(); renderAutoModel(); });
 let autoModelId = '';
 try { autoModelId = localStorage.getItem('pfp-auto-model') || ''; } catch (e) { /* stockage indisponible */ }
-const autoModel = () => state.models.find((m) => m.id === autoModelId) || null;
+const autoModel = () => state.models.find((m) => m.id === autoModelId && !m.preset) || null;
 
 function modelFromEditor(name) {
   const w = ed.r.src.width, h = ed.r.src.height, M = Math.max(w, h);
@@ -1594,7 +1597,7 @@ async function applyModelToRepl(r, m) {
 async function saveModel() {
   if (!ed.r) return;
   const name = $('#ed-mname').value.trim() || 'Modèle ' + (state.models.length + 1);
-  const prev = state.models.find((m) => norm(m.name) === norm(name)); // même nom = mise à jour, pas de doublon
+  const prev = state.models.find((m) => !m.preset && norm(m.name) === norm(name)); // même nom = mise à jour, pas de doublon
   const m = { ...modelFromEditor(name), id: prev ? prev.id : 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) };
   try {
     await LIB.putModel(m);
@@ -1612,7 +1615,8 @@ async function deleteModel(m) {
 }
 function renderModels() {
   const box = $('#ed-models');
-  const list = state.models.slice().sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  const list = state.models.filter((m) => !m.preset).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  renderPresetBox();
   box.replaceChildren(...(list.length ? list.map((m) => el('span', { class: 'model-chip' },
     el('button', { class: 'apply', text: m.name, title: 'Appliquer ce modèle', onclick: () => { if (ed.r) applyModelToEditor(m); } }),
     el('button', { class: 'del', text: '×', 'aria-label': 'Supprimer le modèle ' + m.name, onclick: () => deleteModel(m) })))
@@ -1620,16 +1624,141 @@ function renderModels() {
 }
 function renderAutoModel() {
   const sel = $('#auto-model');
-  $('#auto-model-row').hidden = !state.models.length;
+  const models = state.models.filter((m) => !m.preset);
+  $('#auto-model-row').hidden = !models.length;
   if (autoModelId && !autoModel()) autoModelId = '';
   sel.replaceChildren(el('option', { value: '', text: 'telles quelles' }),
-    ...state.models.slice().sort((a, b) => a.name.localeCompare(b.name, 'fr')).map((m) => el('option', { value: m.id, text: 'modèle « ' + m.name + ' »' })));
+    ...models.sort((a, b) => a.name.localeCompare(b.name, 'fr')).map((m) => el('option', { value: m.id, text: 'modèle « ' + m.name + ' »' })));
   sel.value = autoModelId;
 }
 $('#auto-model').addEventListener('change', (e) => {
   autoModelId = e.target.value;
   try { localStorage.setItem('pfp-auto-model', autoModelId); } catch (err) { /* stockage indisponible */ }
 });
+
+/* ---------- Pudgy Penguins : ajout par numéro et preset de découpe par collection ---------- */
+const PUDGY = {
+  big: {
+    label: 'Big', name: 'Big Pudgy', max: 8887,
+    urls: (n) => ['https://ipfs.filebase.io', 'https://gateway.pinata.cloud', 'https://ipfs.io', 'https://dweb.link', 'https://w3s.link', 'https://4everland.io']
+      .map((g) => `${g}/ipfs/QmNf1UsmdGaMbpatQ6toXSkzDpizaGmC9zfunCyoz1enD5/penguin/${n}.png`),
+    // preset d'origine : fond uni retiré, coupé au col (buste), tête recadrée
+    preset: { autoFrame: true, crop: { cx: 0.5, cy: 0.42, size: 0.8, angle: 0 }, bg: { mode: 'flat', tol: 14 },
+      style: { shape: 'none', size: 1, outline: 'global', flip: false }, adj: { bright: 0, contrast: 0, sat: 0 },
+      collar: { on: true, vx: 0.5, vy: 0.8, open: 140, tilt: 0, round: 30 } },
+  },
+  lil: {
+    label: 'Lil', name: 'Lil Pudgy', max: 22221,
+    urls: (n) => [`https://api.pudgypenguins.io/lil/image/${n}`],
+    preset: { autoFrame: true, crop: { cx: 0.5, cy: 0.55, size: 0.4, angle: 0 }, bg: { mode: 'flat', tol: 14 },
+      style: { shape: 'none', size: 1, outline: 'global', flip: false }, adj: { bright: 0, contrast: 0, sat: 0 },
+      collar: { on: true, vx: 0.5, vy: 0.73, open: 170, tilt: 0, round: 20 } },
+  },
+};
+// Pudgys « classiques » : peau bleue ou rose, sans chapeau ni accessoire, visage « Cute » (trouvés dans les métadonnées on-chain).
+const PUDGY_CLASSICS = [
+  { kind: 'lil', n: 2928, label: 'Lil bleu', color: '#4467b5' },
+  { kind: 'lil', n: 7646, label: 'Lil rose', color: '#f5c2dc' },
+  { kind: 'big', n: 6803, label: 'Big classique', color: '#1b2233' }, // les Big n'ont pas de peau bleue
+];
+const pudgyPreset = (kind) => state.models.find((m) => m.preset === kind) || { ...PUDGY[kind].preset, name: 'Preset ' + PUDGY[kind].label };
+
+async function fetchPudgy(kind, n) {
+  let last = null;
+  for (const url of PUDGY[kind].urls(n)) {
+    try {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+      const res = await fetch(url, { mode: 'cors', signal: ctl.signal }).finally(() => clearTimeout(timer));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('pas une image');
+      return new File([blob], `${PUDGY[kind].name} #${n}.png`, { type: blob.type });
+    } catch (err) { last = err; }
+  }
+  throw last || new Error('introuvable');
+}
+function parseNums(txt, max) {
+  const out = [], bad = [];
+  for (const t of txt.split(/[\s,;]+/).filter(Boolean)) {
+    const n = Number(t.replace(/^#/, ''));
+    if (Number.isInteger(n) && n >= 0 && n <= max) { if (!out.includes(n)) out.push(n); } else bad.push(t);
+  }
+  return { out, bad };
+}
+let pudgyBusy = 0;
+async function addPudgys(kind, nums) {
+  const btn = $('#pg-add');
+  pudgyBusy++; btn.disabled = true; btn.textContent = 'Téléchargement…';
+  const failed = [];
+  const have = (n) => state.repls.some((r) => r.pudgy && r.pudgy.kind === kind && r.pudgy.n === n);
+  const dl = nums.map((n) => {
+    if (have(n)) { toast(`${PUDGY[kind].name} #${n} est déjà dans la liste.`); return null; }
+    return fetchPudgy(kind, n).catch((err) => { console.error(err); failed.push(n); return null; });
+  });
+  // ajoutés dans l'ordre demandé, chacun dès qu'il est prêt
+  for (let i = 0; i < nums.length; i++) {
+    const file = await dl[i];
+    if (file && !have(nums[i])) addRepls([file], { pudgy: { kind, n: nums[i] } });
+  }
+  if (--pudgyBusy === 0) { btn.disabled = false; btn.textContent = 'Ajouter'; }
+  if (failed.length) toast(`Téléchargement impossible : ${PUDGY[kind].name} #${failed.join(', #')}. Vérifie la connexion.`);
+}
+function submitPudgy() {
+  const kind = $('#pg-kind').value, { out, bad } = parseNums($('#pg-num').value, PUDGY[kind].max);
+  if (bad.length) { toast(`Numéro invalide : ${bad.join(', ')} (${PUDGY[kind].name} : 0 à ${PUDGY[kind].max}).`); return; }
+  if (!out.length) { $('#pg-num').focus(); return; }
+  $('#pg-num').value = '';
+  addPudgys(kind, out);
+}
+$('#pg-add').addEventListener('click', submitPudgy);
+$('#pg-num').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitPudgy(); } });
+$('#pg-classics').replaceChildren(...PUDGY_CLASSICS.map((c) => el('button', {
+  class: 'btn small', title: `${PUDGY[c.kind].name} #${c.n}`, onclick: () => addPudgys(c.kind, [c.n]),
+}, el('span', { class: 'dot', style: `background:${c.color}` }), c.label)));
+
+// Preset dans l'éditeur (visible seulement pour un Pudgy)
+function renderPresetBox() {
+  const box = $('#ed-preset'), p = ed.r && ed.r.pudgy;
+  box.hidden = !p;
+  if (!p) return;
+  const k = PUDGY[p.kind], custom = state.models.some((m) => m.preset === p.kind);
+  $('#ed-preset-title').textContent = `${k.name} #${p.n} — preset ${k.label} ${custom ? '(personnalisé)' : "(d'origine)"}`;
+  $('#ed-preset-save').textContent = `Enregistrer comme preset ${k.label}`;
+  $('#ed-preset-reset').hidden = !custom;
+}
+async function reapplyPreset(kind, except) {
+  const m = pudgyPreset(kind);
+  const list = state.repls.filter((r) => r.ready && !r.error && r.pudgy && r.pudgy.kind === kind && r !== except);
+  for (const r of list) { await applyModelToRepl(r, m); updatePreview(r); }
+  if (list.length) { renderRepls(); renderGroups(); scheduleRender(); }
+  return list.length;
+}
+async function savePreset() {
+  const p = ed.r && ed.r.pudgy;
+  if (!p) return;
+  const k = PUDGY[p.kind];
+  const m = { ...modelFromEditor('Preset ' + k.label), id: 'preset-' + p.kind, preset: p.kind };
+  try { await LIB.putModel(m); } catch (err) { toast('Preset non enregistré : ' + err.message); return; }
+  state.models = state.models.filter((x) => x.id !== m.id).concat(m);
+  renderPresetBox();
+  const n = await reapplyPreset(p.kind, ed.r);
+  toast(`Preset ${k.label} enregistré` + (n ? ` et appliqué aux ${n} autre${n > 1 ? 's' : ''} ${k.name}.` : '. Il servira pour les prochains ' + k.name + '.'));
+}
+async function resetPreset() {
+  const p = ed.r && ed.r.pudgy;
+  if (!p) return;
+  const k = PUDGY[p.kind];
+  if (!confirm(`Revenir au preset ${k.label} d'origine ?`)) return;
+  await LIB.delModel('preset-' + p.kind);
+  state.models = state.models.filter((m) => m.preset !== p.kind);
+  await applyModelToEditor(pudgyPreset(p.kind));
+  renderPresetBox();
+  const n = await reapplyPreset(p.kind, ed.r);
+  toast(`Preset ${k.label} d'origine rétabli` + (n ? ` (${n} autre${n > 1 ? 's' : ''} ${k.name} mis à jour).` : '.'));
+}
+$('#ed-preset-save').addEventListener('click', savePreset);
+$('#ed-preset-apply').addEventListener('click', () => { if (ed.r && ed.r.pudgy) applyModelToEditor(pudgyPreset(ed.r.pudgy.kind)); });
+$('#ed-preset-reset').addEventListener('click', resetPreset);
 
 /* ---------- UI ---------- */
 function setStatus(msg, pct) {
