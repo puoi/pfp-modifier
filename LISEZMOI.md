@@ -82,7 +82,8 @@ le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
    taille, inclinaison, contour (avec « Libre » + image détourée, le contour suit la silhouette, façon sticker).
 4. **Résultats** : aperçus en direct, export en pleine résolution. « Ajuster » sur une photo permet de régler
    chaque visage à la main : glisser pour déplacer, pincer / molette / curseurs pour la taille et l'angle,
-   « Miroir » pour retourner l'image posée sur ce visage seulement (pratique pour qu'elle regarde du bon côté),
+   pincer en dehors des visages (ou « + » / « − », molette) pour zoomer sur la photo et glisser pour s'y déplacer,
+   « Vue entière » pour revenir ; « Miroir » pour retourner l'image posée sur ce visage seulement (pratique pour qu'elle regarde du bon côté),
    « Ne pas remplacer ce visage » pour le laisser intact sur cette photo.
 
 Des photos ajoutées plus tard sont rattachées aux personnes existantes sans perdre tes corrections.

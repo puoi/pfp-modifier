@@ -281,6 +281,9 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .ed-sec .seg button { font-size: 13px; padding: 7px 11px; }
 .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .viewer .stage canvas { max-width: 100%; max-height: 100%; border-radius: 6px; touch-action: none; cursor: move; }
+.viewer .fx-zoom { display: flex; align-items: center; justify-content: center; gap: 8px; flex-basis: 100%; }
+.viewer .fx-zoom output { color: #fff; font-variant-numeric: tabular-nums; min-width: 52px; text-align: center; font-size: 13px; }
+.viewer .fx-zoom .btn { min-width: 40px; }
 .viewer .range-row { color: rgba(255,255,255,.8); flex-basis: 100%; max-width: 520px; }
 .viewer .range-row output { color: #fff; }
 .fx-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; flex-basis: 100%; }
@@ -419,6 +422,12 @@ footer.foot { color: var(--muted); font-size: 12px; }
   <div class="stage"><img id="viewer-img" alt="Aperçu"><canvas id="viewer-canvas" hidden aria-label="Photo : touche un visage, glisse pour le déplacer, pince pour la taille et l'angle"></canvas></div>
   <div class="bar" id="fx-bar" hidden>
     <p class="note" id="fx-hint"></p>
+    <div class="fx-zoom" role="group" aria-label="Zoom sur la photo">
+      <button class="btn small" id="fx-zoom-minus" aria-label="Dézoomer">−</button>
+      <output id="fx-zoom-out">100 %</output>
+      <button class="btn small" id="fx-zoom-in" aria-label="Zoomer">+</button>
+      <button class="btn small" id="fx-zoom-fit">Vue entière</button>
+    </div>
     <div class="fx-controls" id="fx-controls" style="visibility:hidden">
       <div class="range-row">
         <label for="fx-size">Taille</label>

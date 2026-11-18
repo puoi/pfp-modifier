@@ -710,7 +710,37 @@ function closeViewer() {
 }
 
 /* ---------- Ajustement visage par visage sur la photo finale ---------- */
-const fx = { on: false, base: null, k: 1, sel: null, pointers: new Map() };
+const fx = { on: false, base: null, k: 1, sel: null, pointers: new Map(), mode: null, moved: false, view: { z: 1, x: 0, y: 0 } };
+const FX_ZMAX = 6;
+// Vue zoomée : un point b de la photo s'affiche en (b - view) * z, en px canvas.
+function fxClampView() {
+  const v = fx.view, cv = $('#viewer-canvas');
+  v.z = Math.min(FX_ZMAX, Math.max(1, v.z));
+  v.x = Math.min(cv.width - cv.width / v.z, Math.max(0, v.x));
+  v.y = Math.min(cv.height - cv.height / v.z, Math.max(0, v.y));
+}
+// Zoome en gardant fixe le point (cx, cy) du canvas (px canvas à l'écran).
+function fxZoomAt(z, cx, cy) {
+  const v = fx.view, bx = cx / v.z + v.x, by = cy / v.z + v.y;
+  v.z = Math.min(FX_ZMAX, Math.max(1, z));
+  v.x = bx - cx / v.z; v.y = by - cy / v.z;
+  fxClampView(); syncFxZoom(); drawFx();
+}
+function fxZoomCenter(f) {
+  const cv = $('#viewer-canvas'), v = fx.view;
+  let cx = cv.width / 2, cy = cv.height / 2;
+  if (fx.sel) { // zoomer vers le visage sélectionné
+    const g = faceGeom(fx.sel, replFor(fx.sel), fx.k);
+    cx = Math.min(cv.width, Math.max(0, (g.x - v.x) * v.z)); cy = Math.min(cv.height, Math.max(0, (g.y - v.y) * v.z));
+  }
+  fxZoomAt(v.z * f, cx, cy);
+}
+function syncFxZoom() {
+  $('#fx-zoom-out').textContent = Math.round(fx.view.z * 100) + ' %';
+  $('#fx-zoom-fit').disabled = fx.view.z <= 1.001;
+  $('#fx-zoom-minus').disabled = fx.view.z <= 1.001;
+  $('#fx-zoom-in').disabled = fx.view.z >= FX_ZMAX - 0.001;
+}
 function setFxMode(on) {
   fx.on = on;
   $('#viewer-img').hidden = on;
@@ -718,6 +748,7 @@ function setFxMode(on) {
   $('#viewer-bar').hidden = on;
   $('#fx-bar').hidden = !on;
   if (!on) { fx.base = null; fx.sel = null; fx.pointers.clear(); }
+  fx.view = { z: 1, x: 0, y: 0 }; fx.mode = null;
 }
 const fxFaces = () => state.faces.filter((f) => f.photoId === viewer.photo.id && replFor(f));
 async function startFx() {
@@ -735,14 +766,18 @@ async function startFx() {
   cv.width = fx.base.width; cv.height = fx.base.height;
   const faces = fxFaces();
   fx.sel = faces.length === 1 ? faces[0] : null;
-  syncFx(); drawFx();
+  fx.view = { z: 1, x: 0, y: 0 };
+  syncFx(); syncFxZoom(); drawFx();
 }
 function drawFx() {
   if (!fx.on || !fx.base) return;
-  const cv = $('#viewer-canvas'), ctx = cv.getContext('2d');
+  const cv = $('#viewer-canvas'), ctx = cv.getContext('2d'), v = fx.view;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(v.z, 0, 0, v.z, -v.x * v.z, -v.y * v.z);
   ctx.drawImage(fx.base, 0, 0);
   drawFaces(ctx, viewer.photo, fx.k);
-  const u = cv.width / Math.max(1, cv.getBoundingClientRect().width); // 1 px écran, en px canvas
+  const u = cv.width / Math.max(1, cv.getBoundingClientRect().width) / v.z; // 1 px écran, en px photo
   for (const f of fxFaces()) {
     const g = faceGeom(f, replFor(f), fx.k), hidden = fadjOf(f).hidden, sel = f === fx.sel;
     ctx.save();
@@ -759,8 +794,8 @@ function syncFx() {
   const f = fx.sel, a = f ? fadjOf(f) : null;
   $('#fx-controls').style.visibility = f ? '' : 'hidden';
   $('#fx-hint').textContent = f
-    ? 'Glisse pour déplacer · pince ou molette pour la taille et l\'angle.'
-    : 'Touche un visage remplacé pour le régler.';
+    ? 'Sur le visage : glisse pour déplacer, pince pour la taille et l\'angle. Ailleurs : pince pour zoomer, glisse pour te déplacer.'
+    : 'Touche un visage remplacé pour le régler. Pince en dehors des visages pour zoomer.';
   if (!f) return;
   $('#fx-size').value = Math.log2(a.k);
   $('#fx-size-out').textContent = Math.round(a.k * 100) + ' %';
@@ -777,9 +812,15 @@ function editAdj(f, fn) {
   f.adj.rot = Math.atan2(Math.sin(f.adj.rot), Math.cos(f.adj.rot));
   syncFx(); drawFx();
 }
-function fxPoint(e) {
+// Point du canvas à l'écran (px canvas, sans zoom)
+function fxScreen(e) {
   const cv = $('#viewer-canvas'), rc = cv.getBoundingClientRect();
   return { x: ((e.clientX - rc.left) / rc.width) * cv.width, y: ((e.clientY - rc.top) / rc.height) * cv.height };
+}
+// Point de la photo sous le doigt (tient compte du zoom)
+function fxPoint(e) {
+  const s = fxScreen(e), v = fx.view;
+  return { x: s.x / v.z + v.x, y: s.y / v.z + v.y };
 }
 function fxHit(pt) {
   let best = null, bd = Infinity;
@@ -811,16 +852,42 @@ async function finishFx() {
     if (!fx.base) return;
     cv.setPointerCapture(e.pointerId);
     const pt = fxPoint(e);
-    fx.pointers.set(e.pointerId, pt);
+    fx.pointers.set(e.pointerId, { ...pt, s: fxScreen(e) });
     if (fx.pointers.size === 1) {
+      // Le premier doigt décide : sur un visage = régler ce visage, ailleurs = zoomer / se déplacer dans la photo.
       const hit = fxHit(pt);
-      if (hit !== fx.sel) { fx.sel = hit; syncFx(); drawFx(); }
+      fx.mode = hit ? 'face' : 'view';
+      fx.moved = false;
+      if (hit && hit !== fx.sel) { fx.sel = hit; syncFx(); drawFx(); }
     }
   });
   cv.addEventListener('pointermove', (e) => {
-    if (!fx.pointers.has(e.pointerId) || !fx.sel) return;
+    if (!fx.pointers.has(e.pointerId)) return;
+    if (fx.mode === 'view') {
+      const before = [...fx.pointers.values()].map((p) => p.s);
+      fx.pointers.get(e.pointerId).s = fxScreen(e);
+      const after = [...fx.pointers.values()].map((p) => p.s);
+      const v = fx.view;
+      if (after.length === 1) {
+        const dx = after[0].x - before[0].x, dy = after[0].y - before[0].y;
+        if (Math.hypot(dx, dy) > 2) fx.moved = true;
+        v.x -= dx / v.z; v.y -= dy / v.z;
+        fxClampView(); drawFx();
+      } else {
+        fx.moved = true;
+        const [a0, b0] = before, [a1, b1] = after;
+        const m0 = { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 }, m1 = { x: (a1.x + b1.x) / 2, y: (a1.y + b1.y) / 2 };
+        const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y), d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+        const bx = m0.x / v.z + v.x, by = m0.y / v.z + v.y;
+        if (d0 > 0 && d1 > 0) v.z = Math.min(FX_ZMAX, Math.max(1, (v.z * d1) / d0));
+        v.x = bx - m1.x / v.z; v.y = by - m1.y / v.z;
+        fxClampView(); syncFxZoom(); drawFx();
+      }
+      return;
+    }
+    if (!fx.sel) return;
     const before = [...fx.pointers.values()].map((p) => ({ ...p }));
-    fx.pointers.set(e.pointerId, fxPoint(e));
+    fx.pointers.set(e.pointerId, { ...fxPoint(e), s: fxScreen(e) });
     const after = [...fx.pointers.values()];
     const fs = Math.max(fx.sel.box.w, fx.sel.box.h) * fx.k;
     editAdj(fx.sel, (a) => {
@@ -835,12 +902,24 @@ async function finishFx() {
       }
     });
   });
-  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => fx.pointers.delete(e.pointerId)));
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => cv.addEventListener(t, (e) => {
+    if (!fx.pointers.has(e.pointerId)) return;
+    fx.pointers.delete(e.pointerId);
+    // simple toucher hors d'un visage (sans glisser) : désélectionne
+    if (!fx.pointers.size && fx.mode === 'view' && !fx.moved && t === 'pointerup' && fx.sel) { fx.sel = null; syncFx(); drawFx(); }
+    if (!fx.pointers.size) fx.mode = null;
+  }));
   cv.addEventListener('wheel', (e) => {
-    if (!fx.sel) return;
+    if (!fx.base) return;
     e.preventDefault();
-    editAdj(fx.sel, (a) => { a.k *= Math.exp(-e.deltaY * 0.0015); });
+    const hit = fxHit(fxPoint(e));
+    // molette sur le visage sélectionné = sa taille ; ailleurs (ou pincement du trackpad) = zoom de la photo
+    if (hit && hit === fx.sel && !e.ctrlKey) editAdj(fx.sel, (a) => { a.k *= Math.exp(-e.deltaY * 0.0015); });
+    else { const s = fxScreen(e); fxZoomAt(fx.view.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), s.x, s.y); }
   }, { passive: false });
+  $('#fx-zoom-in').addEventListener('click', () => fxZoomCenter(1.6));
+  $('#fx-zoom-minus').addEventListener('click', () => fxZoomCenter(1 / 1.6));
+  $('#fx-zoom-fit').addEventListener('click', () => { fx.view = { z: 1, x: 0, y: 0 }; syncFxZoom(); drawFx(); });
   $('#fx-size').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.k = Math.pow(2, +e.target.value); }); });
   $('#fx-rot').addEventListener('input', (e) => { if (fx.sel) editAdj(fx.sel, (a) => { a.rot = (+e.target.value * Math.PI) / 180; }); });
   $('#fx-flip').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.flip = !a.flip; }); });
