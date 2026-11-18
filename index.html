@@ -198,6 +198,10 @@ progress::-moz-progress-bar { background: var(--accent); }
 .viewer .bar .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .viewer .bar .btn.primary { background: #fff; color: #141729; border-color: #fff; }
 .viewer .note { color: rgba(255,255,255,.7); font-size: 12px; text-align: center; flex-basis: 100%; margin: 0; }
+.app-version { margin: 4px 0 0; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.app-version .ok { color: #2fa36b; font-weight: 600; }
+.app-version .new { color: var(--accent); font-weight: 600; }
+.app-version .btn { padding: 4px 10px; font-size: 12px; }
 footer.foot { color: var(--muted); font-size: 12px; }
 
 /* images de remplacement : damier = transparence */
@@ -295,6 +299,10 @@ footer.foot { color: var(--muted); font-size: 12px; }
   <header class="top">
     <span class="badge-local"><span>Tout reste sur cet appareil</span> <span id="offline-badge" hidden>· disponible hors ligne</span></span>
     <h1 class="brand">PFP <span>Modifier</span></h1>
+    <p class="app-version" id="app-version" aria-live="polite">
+      <span id="ver-date"></span> · <span id="ver-status">vérification…</span>
+      <button class="btn small primary" id="ver-update" hidden>Mettre à jour</button>
+    </p>
     <p class="lede">Ajoute tes photos, laisse l'app trouver et regrouper les visages par personne, puis choisis une image à poser sur chaque personne. Elle sera placée sur tous ses visages, dans toutes les photos.</p>
   </header>
 

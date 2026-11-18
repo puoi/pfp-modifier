@@ -39,6 +39,14 @@ Pour une utilisation sans ordinateur, tu peux héberger le dossier sur n'importe
 de fichiers statiques en HTTPS (GitHub Pages, Netlify…). Le calcul reste fait sur le téléphone, et
 le menu de partage iOS (« Enregistrer l'image ») est alors disponible.
 
+## Version
+
+Sous le titre, l'app affiche « Version du JJ/MM/AAAA à HH:MM » (heure locale) et, si l'appareil est en ligne,
+« à jour ✓ » ou « nouvelle version … disponible » avec un bouton « Mettre à jour ». Hors ligne, elle indique
+que la vérification est impossible.
+
+Pour publier : `python nouvelle-version.py` (numéro + date/heure dans sw.js, app.js et version.json), puis commit et push.
+
 ## Utilisation
 
 1. **Les images** : les photos à modifier, puis les images de remplacement. Si une image de

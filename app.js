@@ -2075,6 +2075,56 @@ if (typeof faceapi === 'undefined') {
 }
 renderAll();
 
+/* ---------- Version affichée et vérification de mise à jour ---------- */
+// Mis à jour par nouvelle-version.py à chaque publication (avec sw.js et version.json).
+const APP_VERSION = { version: 'pfp-v11', built: '2026-11-18T22:49:02Z' };
+const fmtBuilt = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+};
+$('#ver-date').textContent = 'Version du ' + fmtBuilt(APP_VERSION.built);
+$('#ver-date').title = APP_VERSION.version;
+let verChecking = false;
+async function checkVersion() {
+  if (verChecking) return;
+  verChecking = true;
+  const st = $('#ver-status'), btn = $('#ver-update');
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const v = await res.json();
+    if (v.version === APP_VERSION.version) {
+      st.className = 'ok'; st.textContent = 'à jour ✓'; btn.hidden = true;
+    } else if (Date.parse(v.built) > Date.parse(APP_VERSION.built)) {
+      st.className = 'new'; st.textContent = 'nouvelle version du ' + fmtBuilt(v.built) + ' disponible'; btn.hidden = false;
+    } else {
+      st.className = ''; st.textContent = 'en ligne : version du ' + fmtBuilt(v.built); btn.hidden = true;
+    }
+  } catch (err) {
+    st.className = ''; st.textContent = navigator.onLine === false ? 'hors ligne : vérification impossible' : 'vérification impossible'; btn.hidden = true;
+  } finally { verChecking = false; }
+}
+async function updateApp() {
+  const btn = $('#ver-update');
+  btn.disabled = true; btn.textContent = 'Mise à jour…';
+  try {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) {
+      const changed = new Promise((res) => {
+        navigator.serviceWorker.addEventListener('controllerchange', res, { once: true });
+        setTimeout(res, 10000);
+      });
+      await reg.update();
+      if (reg.installing || reg.waiting) await changed;
+    }
+  } catch (err) { console.warn(err); }
+  location.reload();
+}
+$('#ver-update').addEventListener('click', updateApp);
+checkVersion();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkVersion(); });
+window.addEventListener('online', checkVersion);
+
 /* ---------- Hors ligne (PWA) ---------- */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   navigator.serviceWorker.register('sw.js')
