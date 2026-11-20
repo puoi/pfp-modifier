@@ -93,5 +93,8 @@ Pour publier : `python nouvelle-version.py` (numéro + date/heure dans sw.js, ap
    pincer en dehors des visages (ou « + » / « − », molette) pour zoomer sur la photo et glisser pour s'y déplacer,
    « Vue entière » pour revenir ; « Miroir » pour retourner l'image posée sur ce visage seulement (pratique pour qu'elle regarde du bon côté),
    « Ne pas remplacer ce visage » pour le laisser intact sur cette photo.
+   **Visage non détecté** : « + Visage » (ou le bouton « + Visage » sous une photo sans visage) puis choisis l'image ;
+   elle se pose au centre de la vue, à régler comme les autres. Elle rejoint la personne qui a déjà cette image
+   (sinon une nouvelle personne). « Supprimer ce visage ajouté » pour l'enlever.
 
 Des photos ajoutées plus tard sont rattachées aux personnes existantes sans perdre tes corrections.

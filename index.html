@@ -290,6 +290,11 @@ footer.foot { color: var(--muted); font-size: 12px; }
 .viewer .fx-zoom .btn { min-width: 40px; }
 .viewer .range-row { color: rgba(255,255,255,.8); flex-basis: 100%; max-width: 520px; }
 .viewer .range-row output { color: #fff; }
+.viewer .fx-add { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; color: rgba(255,255,255,.85); font-size: 13px; }
+.viewer .fx-add-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.viewer .fx-add-opt { width: 48px; height: 48px; padding: 0; border-radius: 10px; border: 2px solid rgba(255,255,255,.35); background: #222; overflow: hidden; cursor: pointer; }
+.viewer .fx-add-opt:hover, .viewer .fx-add-opt:focus-visible { border-color: var(--accent); }
+.viewer .fx-add-opt img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .fx-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; flex-basis: 100%; }
 .result figcaption .btn.small { padding: 3px 10px; font-size: 12px; flex: none; }
 </style>
@@ -435,6 +440,12 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <output id="fx-zoom-out">100 %</output>
       <button class="btn small" id="fx-zoom-in" aria-label="Zoomer">+</button>
       <button class="btn small" id="fx-zoom-fit">Vue entière</button>
+      <button class="btn small" id="fx-add">+ Visage</button>
+    </div>
+    <div class="fx-add" id="fx-add-pick" hidden>
+      <span>Visage non détecté ? Choisis l'image à placer :</span>
+      <div class="fx-add-list" id="fx-add-list"></div>
+      <button class="btn small" id="fx-add-cancel">Annuler</button>
     </div>
     <div class="fx-controls" id="fx-controls" style="visibility:hidden">
       <div class="range-row">
@@ -450,6 +461,7 @@ footer.foot { color: var(--muted); font-size: 12px; }
       <button class="btn small" id="fx-flip" aria-pressed="false">Miroir</button>
       <button class="btn small" id="fx-hide">Ne pas remplacer ce visage</button>
       <button class="btn small" id="fx-reset">Réinitialiser</button>
+      <button class="btn small" id="fx-remove" hidden>Supprimer ce visage ajouté</button>
     </div>
     <button class="btn primary" id="fx-done">Terminé</button>
   </div>

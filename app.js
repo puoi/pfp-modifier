@@ -324,6 +324,7 @@ function dist(a, b) {
 }
 // Classification hiérarchique « average linkage », avec interdiction de réunir deux visages d'une même photo.
 function clusterFaces(faces, t) {
+  faces = faces.filter((f) => f.desc); // les visages ajoutés à la main n'ont pas d'empreinte
   const n = faces.length;
   if (!n) return [];
   const members = faces.map((f) => [f]);
@@ -364,8 +365,8 @@ function integrateFaces(newFaces) {
   for (const c of clusters) {
     let best = null, bd = state.threshold;
     for (const g of state.groups) {
-      const gf = facesOf(g.id);
-      if (!gf.length || gf.some((f) => c.some((x) => x.photoId === f.photoId))) continue;
+      const all = facesOf(g.id), gf = all.filter((f) => f.desc);
+      if (!gf.length || all.some((f) => c.some((x) => x.photoId === f.photoId))) continue;
       let s = 0;
       for (const a of c) for (const b of gf) s += dist(a.desc, b.desc);
       const d = s / (c.length * gf.length);
@@ -388,6 +389,14 @@ function regroupAll() {
     const top = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
     const og = top && oldGroups.get(top[0]);
     if (og) { g.replId = og.replId; if (!/^Personne \d+$/.test(og.name)) g.name = og.name; }
+  }
+  // Visages ajoutés à la main : restent avec la même image de remplacement
+  for (const f of state.faces) {
+    if (f.desc || f.groupId === 'ignored') continue;
+    const og = oldGroups.get(old.get(f.id));
+    let g = og && og.replId && state.groups.find((x) => x.replId === og.replId);
+    if (!g) { g = newGroup(); if (og) { g.replId = og.replId; if (!/^Personne \d+$/.test(og.name)) g.name = og.name; } }
+    f.groupId = g.id;
   }
   state.selected.clear();
   renderAll(); scheduleRender();
@@ -680,7 +689,8 @@ async function openViewer(id, edit) {
   if (viewer.fullUrl) { URL.revokeObjectURL(viewer.fullUrl); viewer.fullUrl = null; }
   setFxMode(false);
   $('#viewer-img').src = r ? r.url : p.previewUrl;
-  $('#viewer-edit').hidden = !hasRepl(p);
+  $('#viewer-edit').hidden = !canFx(p);
+  $('#viewer-edit').textContent = hasRepl(p) ? 'Ajuster les visages' : 'Ajouter un visage';
   $('#viewer-save').hidden = !r;
   $('#viewer-save').textContent = 'Préparation…';
   $('#viewer-save').disabled = true;
@@ -751,6 +761,46 @@ function setFxMode(on) {
   fx.view = { z: 1, x: 0, y: 0 }; fx.mode = null;
 }
 const fxFaces = () => state.faces.filter((f) => f.photoId === viewer.photo.id && replFor(f));
+const readyRepls = () => state.repls.filter((r) => r.ready && !r.error && (r.preview || r.thumb));
+const canFx = (p) => hasRepl(p) || readyRepls().length > 0;
+// Ajoute à la main un visage que la détection a manqué, au centre de la vue, avec l'image r.
+function addManualFace(r) {
+  const p = viewer.photo, cv = $('#viewer-canvas'), v = fx.view;
+  if (!p || !fx.base) return;
+  const sizes = state.faces.filter((f) => f.photoId === p.id && f.groupId !== 'ignored').map((f) => Math.max(f.box.w, f.box.h)).sort((a, b) => a - b);
+  // taille : celle des autres visages de la photo, sinon environ 1/7 de la photo (et adaptée au zoom)
+  let size = sizes.length ? sizes[sizes.length >> 1] : Math.min(p.w, p.h) / 7;
+  size = Math.min(size, Math.min(p.w, p.h) / (3 * v.z) * 1.5);
+  const cx = (v.x + cv.width / (2 * v.z)) / fx.k, cy = (v.y + cv.height / (2 * v.z)) / fx.k;
+  let g = state.groups.find((x) => x.replId === r.id);
+  if (!g) { g = newGroup(); g.replId = r.id; g.name = baseName(r.name || g.name); }
+  const f = {
+    id: nid('f'), photoId: p.id, manual: true,
+    box: { x: cx - size / 2, y: cy - size / 2, w: size, h: size },
+    angle: 0, desc: null, groupId: g.id,
+    thumb: squareThumb(fx.base, cx * fx.k, cy * fx.k, size * fx.k * 1.35, 128),
+  };
+  state.faces.push(f);
+  p.faceCount = (p.faceCount || 0) + 1;
+  fx.sel = f;
+  $('#fx-add-pick').hidden = true;
+  syncFx(); drawFx(); renderAll();
+}
+function removeManualFace(f) {
+  const p = state.photos.find((x) => x.id === f.photoId);
+  state.faces = state.faces.filter((x) => x !== f);
+  state.selected.delete(f.id);
+  if (p) p.faceCount = Math.max(0, (p.faceCount || 1) - 1);
+  cleanupGroups();
+  fx.sel = null;
+  syncFx(); drawFx(); renderAll();
+}
+function renderFxAddPick() {
+  const rs = readyRepls();
+  $('#fx-add-list').replaceChildren(...rs.map((r) => el('button', {
+    class: 'fx-add-opt', title: r.name, 'aria-label': 'Ajouter un visage avec ' + r.name, onclick: () => addManualFace(r),
+  }, el('img', { src: r.preview || r.thumb, alt: '' }))));
+}
 async function startFx() {
   const p = viewer.photo;
   const token = ++viewer.token;
@@ -767,6 +817,8 @@ async function startFx() {
   const faces = fxFaces();
   fx.sel = faces.length === 1 ? faces[0] : null;
   fx.view = { z: 1, x: 0, y: 0 };
+  $('#fx-add-pick').hidden = faces.length > 0; // aucun visage : propose tout de suite d'en ajouter un
+  renderFxAddPick();
   syncFx(); syncFxZoom(); drawFx();
 }
 function drawFx() {
@@ -795,7 +847,9 @@ function syncFx() {
   $('#fx-controls').style.visibility = f ? '' : 'hidden';
   $('#fx-hint').textContent = f
     ? 'Sur le visage : glisse pour déplacer, pince pour la taille et l\'angle. Ailleurs : pince pour zoomer, glisse pour te déplacer.'
-    : 'Touche un visage remplacé pour le régler. Pince en dehors des visages pour zoomer.';
+    : (fxFaces().length ? 'Touche un visage remplacé pour le régler. Pince en dehors des visages pour zoomer. ' : '')
+      + 'Un visage manque ? « + Visage » puis choisis l\'image.';
+  $('#fx-remove').hidden = !(f && f.manual);
   if (!f) return;
   $('#fx-size').value = Math.log2(a.k);
   $('#fx-size-out').textContent = Math.round(a.k * 100) + ' %';
@@ -833,7 +887,14 @@ function fxHit(pt) {
 }
 async function finishFx() {
   const p = viewer.photo;
+  // vignette des visages ajoutés à la main : à leur position finale
+  if (fx.base) for (const f of state.faces) {
+    if (!f.manual || f.photoId !== p.id || !replFor(f)) continue;
+    const g = faceGeom(f, replFor(f), fx.k);
+    f.thumb = squareThumb(fx.base, g.x, g.y, (g.s / state.settings.scale) * 1.1, 128);
+  }
   setFxMode(false);
+  renderGroups();
   const sig = photoSig(p), cur = state.results.get(p.id);
   if (sig && (!cur || cur.sig !== sig)) {
     const blob = await renderPhoto(p, false);
@@ -925,6 +986,14 @@ async function finishFx() {
   $('#fx-flip').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.flip = !a.flip; }); });
   $('#fx-hide').addEventListener('click', () => { if (fx.sel) editAdj(fx.sel, (a) => { a.hidden = !a.hidden; }); });
   $('#fx-reset').addEventListener('click', () => { if (fx.sel) { fx.sel.adj = null; syncFx(); drawFx(); } });
+  $('#fx-remove').addEventListener('click', () => { if (fx.sel && fx.sel.manual) removeManualFace(fx.sel); });
+  $('#fx-add').addEventListener('click', () => {
+    const pick = $('#fx-add-pick');
+    if (!readyRepls().length) { toast('Ajoute d\'abord une image de remplacement (étape 1).'); return; }
+    renderFxAddPick();
+    pick.hidden = !pick.hidden;
+  });
+  $('#fx-add-cancel').addEventListener('click', () => { $('#fx-add-pick').hidden = true; });
   $('#fx-done').addEventListener('click', finishFx);
   $('#viewer-edit').addEventListener('click', () => { if (viewer.photo) startFx(); });
   window.addEventListener('resize', drawFx);
@@ -1986,7 +2055,7 @@ function drawResultsGrid() {
         el('button', { class: 'frame', id: 'frame-' + p.id, 'aria-label': 'Agrandir ' + p.name, onclick: () => openViewer(p.id) },
           el('img', { src: r ? r.url : (p.previewUrl || p.thumb), alt: p.name, loading: 'lazy' })),
         el('figcaption', {}, el('span', { text: changed ? p.name : 'Inchangée · ' + p.name }),
-          hasRepl(p) ? el('button', { class: 'btn small', text: 'Ajuster', 'aria-label': 'Ajuster les visages de ' + p.name, onclick: () => openViewer(p.id, true) }) : null));
+          canFx(p) ? el('button', { class: 'btn small', text: hasRepl(p) ? 'Ajuster' : '+ Visage', 'aria-label': (hasRepl(p) ? 'Ajuster les visages de ' : 'Ajouter un visage sur ') + p.name, onclick: () => openViewer(p.id, true) }) : null));
     }));
   }
   updateButtons();
@@ -2077,7 +2146,7 @@ renderAll();
 
 /* ---------- Version affichée et vérification de mise à jour ---------- */
 // Mis à jour par nouvelle-version.py à chaque publication (avec sw.js et version.json).
-const APP_VERSION = { version: 'pfp-v11', built: '2026-11-18T22:49:02Z' };
+const APP_VERSION = { version: 'pfp-v12', built: '2026-11-20T17:40:45Z' };
 const fmtBuilt = (iso) => {
   const d = new Date(iso);
   return isNaN(d) ? iso : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
