@@ -721,18 +721,22 @@ function closeViewer() {
 
 /* ---------- Ajustement visage par visage sur la photo finale ---------- */
 const fx = { on: false, base: null, k: 1, sel: null, pointers: new Map(), mode: null, moved: false, view: { z: 1, x: 0, y: 0 } };
-const FX_ZMAX = 6;
+const FX_ZMAX = 6, FX_ZMIN = 0.5;
+const FX_MARGIN = 0.15; // on peut amener au centre de l'écran tout point de la photo, et un peu au-delà des bords
 // Vue zoomée : un point b de la photo s'affiche en (b - view) * z, en px canvas.
 function fxClampView() {
   const v = fx.view, cv = $('#viewer-canvas');
-  v.z = Math.min(FX_ZMAX, Math.max(1, v.z));
-  v.x = Math.min(cv.width - cv.width / v.z, Math.max(0, v.x));
-  v.y = Math.min(cv.height - cv.height / v.z, Math.max(0, v.y));
+  v.z = Math.min(FX_ZMAX, Math.max(FX_ZMIN, v.z));
+  // le centre de la vue reste dans la photo agrandie de FX_MARGIN : on peut dépasser le cadre
+  const W = cv.width, H = cv.height, mx = W * FX_MARGIN, my = H * FX_MARGIN;
+  const hw = W / (2 * v.z), hh = H / (2 * v.z);
+  v.x = Math.min(W + mx - hw, Math.max(-mx - hw, v.x));
+  v.y = Math.min(H + my - hh, Math.max(-my - hh, v.y));
 }
 // Zoome en gardant fixe le point (cx, cy) du canvas (px canvas à l'écran).
 function fxZoomAt(z, cx, cy) {
   const v = fx.view, bx = cx / v.z + v.x, by = cy / v.z + v.y;
-  v.z = Math.min(FX_ZMAX, Math.max(1, z));
+  v.z = Math.min(FX_ZMAX, Math.max(FX_ZMIN, z));
   v.x = bx - cx / v.z; v.y = by - cy / v.z;
   fxClampView(); syncFxZoom(); drawFx();
 }
@@ -747,8 +751,9 @@ function fxZoomCenter(f) {
 }
 function syncFxZoom() {
   $('#fx-zoom-out').textContent = Math.round(fx.view.z * 100) + ' %';
-  $('#fx-zoom-fit').disabled = fx.view.z <= 1.001;
-  $('#fx-zoom-minus').disabled = fx.view.z <= 1.001;
+  const v = fx.view;
+  $('#fx-zoom-fit').disabled = Math.abs(v.z - 1) < 0.001 && Math.abs(v.x) < 0.5 && Math.abs(v.y) < 0.5;
+  $('#fx-zoom-minus').disabled = v.z <= FX_ZMIN + 0.001;
   $('#fx-zoom-in').disabled = fx.view.z >= FX_ZMAX - 0.001;
 }
 function setFxMode(on) {
@@ -826,10 +831,25 @@ function drawFx() {
   const cv = $('#viewer-canvas'), ctx = cv.getContext('2d'), v = fx.view;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#2a2a2e'; // hors de la photo
+  ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.setTransform(v.z, 0, 0, v.z, -v.x * v.z, -v.y * v.z);
   ctx.drawImage(fx.base, 0, 0);
   drawFaces(ctx, viewer.photo, fx.k);
   const u = cv.width / Math.max(1, cv.getBoundingClientRect().width) / v.z; // 1 px écran, en px photo
+  // ce qui dépasse de la photo sera coupé à l'enregistrement : on l'assombrit et on trace le bord
+  const W = fx.base.width, H = fx.base.height;
+  const x0 = v.x, y0 = v.y, x1 = v.x + cv.width / v.z, y1 = v.y + cv.height / v.z;
+  if (x0 < 0 || y0 < 0 || x1 > W || y1 > H) {
+    ctx.beginPath();
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.rect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(20,20,24,.62)';
+    ctx.fill('evenodd');
+    ctx.lineWidth = 1.5 * u; ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)';
+    ctx.strokeRect(0, 0, W, H);
+  }
   for (const f of fxFaces()) {
     const g = faceGeom(f, replFor(f), fx.k), hidden = fadjOf(f).hidden, sel = f === fx.sel;
     ctx.save();
@@ -846,7 +866,7 @@ function syncFx() {
   const f = fx.sel, a = f ? fadjOf(f) : null;
   $('#fx-controls').style.visibility = f ? '' : 'hidden';
   $('#fx-hint').textContent = f
-    ? 'Sur le visage : glisse pour déplacer, pince pour la taille et l\'angle. Ailleurs : pince pour zoomer, glisse pour te déplacer.'
+    ? 'Sur le visage : glisse pour déplacer, pince pour la taille et l\'angle. Ailleurs : pince pour zoomer, glisse pour te déplacer (même au-delà des bords). Ce qui dépasse de la photo est coupé.'
     : (fxFaces().length ? 'Touche un visage remplacé pour le régler. Pince en dehors des visages pour zoomer. ' : '')
       + 'Un visage manque ? « + Visage » puis choisis l\'image.';
   $('#fx-remove').hidden = !(f && f.manual);
@@ -933,14 +953,14 @@ async function finishFx() {
         const dx = after[0].x - before[0].x, dy = after[0].y - before[0].y;
         if (Math.hypot(dx, dy) > 2) fx.moved = true;
         v.x -= dx / v.z; v.y -= dy / v.z;
-        fxClampView(); drawFx();
+        fxClampView(); syncFxZoom(); drawFx();
       } else {
         fx.moved = true;
         const [a0, b0] = before, [a1, b1] = after;
         const m0 = { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 }, m1 = { x: (a1.x + b1.x) / 2, y: (a1.y + b1.y) / 2 };
         const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y), d1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
         const bx = m0.x / v.z + v.x, by = m0.y / v.z + v.y;
-        if (d0 > 0 && d1 > 0) v.z = Math.min(FX_ZMAX, Math.max(1, (v.z * d1) / d0));
+        if (d0 > 0 && d1 > 0) v.z = Math.min(FX_ZMAX, Math.max(FX_ZMIN, (v.z * d1) / d0));
         v.x = bx - m1.x / v.z; v.y = by - m1.y / v.z;
         fxClampView(); syncFxZoom(); drawFx();
       }
@@ -2146,7 +2166,7 @@ renderAll();
 
 /* ---------- Version affichée et vérification de mise à jour ---------- */
 // Mis à jour par nouvelle-version.py à chaque publication (avec sw.js et version.json).
-const APP_VERSION = { version: 'pfp-v12', built: '2026-11-20T17:40:45Z' };
+const APP_VERSION = { version: 'pfp-v13', built: '2026-11-20T18:03:28Z' };
 const fmtBuilt = (iso) => {
   const d = new Date(iso);
   return isNaN(d) ? iso : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });

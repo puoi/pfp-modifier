@@ -91,7 +91,8 @@ Pour publier : `python nouvelle-version.py` (numéro + date/heure dans sw.js, ap
 4. **Résultats** : aperçus en direct, export en pleine résolution. « Ajuster » sur une photo permet de régler
    chaque visage à la main : glisser pour déplacer, pincer / molette / curseurs pour la taille et l'angle,
    pincer en dehors des visages (ou « + » / « − », molette) pour zoomer sur la photo et glisser pour s'y déplacer,
-   « Vue entière » pour revenir ; « Miroir » pour retourner l'image posée sur ce visage seulement (pratique pour qu'elle regarde du bon côté),
+   « Vue entière » pour revenir. La vue peut dépasser les bords de la photo (et dézoomer jusqu'à 50 %) pour poser
+   un visage à moitié dehors : la partie hors photo est assombrie et sera coupée à l'enregistrement ; « Miroir » pour retourner l'image posée sur ce visage seulement (pratique pour qu'elle regarde du bon côté),
    « Ne pas remplacer ce visage » pour le laisser intact sur cette photo.
    **Visage non détecté** : « + Visage » (ou le bouton « + Visage » sous une photo sans visage) puis choisis l'image ;
    elle se pose au centre de la vue, à régler comme les autres. Elle rejoint la personne qui a déjà cette image
