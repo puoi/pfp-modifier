@@ -1807,23 +1807,114 @@ $('#auto-model').addEventListener('change', (e) => {
   try { localStorage.setItem('pfp-auto-model', autoModelId); } catch (err) { /* stockage indisponible */ }
 });
 
-/* ---------- Pudgy Penguins : ajout par numéro et preset de découpe par collection ---------- */
+/* ---------- Collections NFT (Pudgy Penguins, BAYC, MAYC, SMB) : ajout par numéro et preset de découpe par collection ---------- */
+// Collections NFT : une image par numéro, préparée avec le preset de sa collection.
+// (Le champ r.pudgy = {kind, n} sert pour toutes les collections, nom gardé pour les bibliothèques existantes.)
+const IPFS_GATEWAYS = ['https://ipfs.filebase.io', 'https://gateway.pinata.cloud', 'https://ipfs.io', 'https://dweb.link', 'https://w3s.link', 'https://4everland.io'];
+const ipfsUrls = (uri) => {
+  const path = String(uri).replace(/^ipfs:\/\/(ipfs\/)?/, '').replace(/^https?:\/\/[^/]+\/ipfs\//, '');
+  return IPFS_GATEWAYS.map((g) => `${g}/ipfs/${path}`);
+};
+const presetOf = (crop, collar, tol = 14) => ({
+  autoFrame: true, crop: { ...crop, angle: 0 }, bg: { mode: 'flat', tol },
+  style: { shape: 'none', size: 1, outline: 'global', flip: false }, adj: { bright: 0, contrast: 0, sat: 0 },
+  collar: { on: true, tilt: 0, ...collar },
+});
+async function fetchT(url, ms = 30000) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { mode: 'cors', signal: ctl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res;
+  } finally { clearTimeout(timer); }
+}
+// Essaie chaque adresse jusqu'à ce qu'une réponde.
+async function firstOk(urls, read) {
+  let last = null;
+  for (const u of urls) {
+    try { return await read(await fetchT(u)); } catch (err) { last = err; }
+  }
+  throw last || new Error('introuvable');
+}
+const readImage = async (res) => {
+  const b = await res.blob();
+  if (!b.type.startsWith('image/')) throw new Error('pas une image');
+  return b;
+};
+const readJson = (res) => res.json();
+// Images « pixel art » (SMB) : agrandies sans flou avant tout traitement.
+async function pixelUp(blob) {
+  const bmp = await createImageBitmap(blob);
+  const k = Math.max(1, Math.floor(1024 / Math.max(bmp.width, bmp.height)));
+  if (k === 1) { bmp.close && bmp.close(); return blob; }
+  const c = document.createElement('canvas');
+  c.width = bmp.width * k; c.height = bmp.height * k;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close && bmp.close();
+  return toBlob(c, 'image/png');
+}
+// Index fournis avec l'app (data/…), lus une fois puis gardés (et mis en cache hors ligne par le service worker).
+const indexCache = new Map();
+function loadIndex(path) {
+  if (!indexCache.has(path)) indexCache.set(path, fetchT(path, 30000).then(readJson).catch((e) => { indexCache.delete(path); throw e; }));
+  return indexCache.get(path);
+}
+
 const PUDGY = {
   big: {
-    label: 'Big', name: 'Big Pudgy', max: 8887,
-    urls: (n) => ['https://ipfs.filebase.io', 'https://gateway.pinata.cloud', 'https://ipfs.io', 'https://dweb.link', 'https://w3s.link', 'https://4everland.io']
-      .map((g) => `${g}/ipfs/QmNf1UsmdGaMbpatQ6toXSkzDpizaGmC9zfunCyoz1enD5/penguin/${n}.png`),
+    label: 'Big', name: 'Big Pudgy', group: 'Pudgy Penguins', min: 0, max: 8887,
+    image: (n) => firstOk(ipfsUrls(`QmNf1UsmdGaMbpatQ6toXSkzDpizaGmC9zfunCyoz1enD5/penguin/${n}.png`), readImage),
     // preset d'origine : fond uni retiré, coupé au col (buste), tête recadrée
-    preset: { autoFrame: true, crop: { cx: 0.5, cy: 0.42, size: 0.8, angle: 0 }, bg: { mode: 'flat', tol: 14 },
-      style: { shape: 'none', size: 1, outline: 'global', flip: false }, adj: { bright: 0, contrast: 0, sat: 0 },
-      collar: { on: true, vx: 0.5, vy: 0.8, open: 140, tilt: 0, round: 30 } },
+    preset: presetOf({ cx: 0.5, cy: 0.42, size: 0.8 }, { vx: 0.5, vy: 0.8, open: 140, round: 30 }),
   },
   lil: {
-    label: 'Lil', name: 'Lil Pudgy', max: 22221,
-    urls: (n) => [`https://api.pudgypenguins.io/lil/image/${n}`],
-    preset: { autoFrame: true, crop: { cx: 0.5, cy: 0.55, size: 0.4, angle: 0 }, bg: { mode: 'flat', tol: 14 },
-      style: { shape: 'none', size: 1, outline: 'global', flip: false }, adj: { bright: 0, contrast: 0, sat: 0 },
-      collar: { on: true, vx: 0.5, vy: 0.73, open: 170, tilt: 0, round: 20 } },
+    label: 'Lil', name: 'Lil Pudgy', group: 'Pudgy Penguins', min: 0, max: 22221,
+    image: (n) => firstOk([`https://api.pudgypenguins.io/lil/image/${n}`], readImage),
+    preset: presetOf({ cx: 0.5, cy: 0.55, size: 0.4 }, { vx: 0.5, vy: 0.73, open: 170, round: 20 }),
+  },
+  bayc: {
+    label: 'BAYC', name: 'BAYC', group: 'Bored Ape Yacht Club', min: 0, max: 9999,
+    image: async (n) => {
+      const meta = await firstOk(ipfsUrls(`QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq/${n}`), readJson);
+      return firstOk(ipfsUrls(meta.image), readImage);
+    },
+    preset: presetOf({ cx: 0.52, cy: 0.5, size: 0.8 }, { vx: 0.52, vy: 0.82, open: 150, round: 20 }),
+  },
+  mayc: {
+    label: 'MAYC', name: 'MAYC', group: 'Bored Ape Yacht Club', min: 0, max: 30007,
+    image: async (n) => {
+      // index numéro -> image (data/mayc, par tranches de 1000) ; l'API officielle est derrière Cloudflare
+      const part = await loadIndex(`data/mayc/${Math.floor(n / 1000)}.json`).catch(() => ({}));
+      if (part[n]) return firstOk(ipfsUrls(part[n]), readImage);
+      const meta = await firstOk([`https://boredapeyachtclub.com/api/mutants/${n}`], readJson).catch(() => { throw new Error('introuvable : pas dans l’index (HTTP 404)'); });
+      return firstOk(ipfsUrls(meta.image), readImage);
+    },
+    preset: presetOf({ cx: 0.52, cy: 0.5, size: 0.8 }, { vx: 0.52, vy: 0.82, open: 150, round: 20 }),
+  },
+  smb2: {
+    label: 'SMB Gen2', name: 'SMB', group: 'MonkeDAO', min: 1, max: 5000,
+    image: async (n) => {
+      // index numéro -> image (data/smb2.json) : une seule requête vers Arweave, parfois lent
+      const idx = await loadIndex('data/smb2.json').catch(() => null);
+      const id = idx && idx.image[n];
+      if (id) return pixelUp(await firstOk([idx.base + id, idx.base + id], (r) => readImage(r)));
+      const meta = await firstOk([`https://arweave.net/w4RVczdWwyiWS8tXgDenLEL7iFDdu4bi2YVmGyQo_dE/${n}.json`], readJson);
+      return pixelUp(await firstOk([meta.image], readImage));
+    },
+    preset: presetOf({ cx: 0.5, cy: 0.5, size: 0.84 }, { vx: 0.5, vy: 0.82, open: 160, round: 10 }, 6),
+  },
+  smb3: {
+    label: 'SMB Gen3', name: 'SMB Gen3', group: 'MonkeDAO', min: 1, max: 15000,
+    image: async (n) => {
+      const idx = await loadIndex('data/smb3.json');
+      const id = idx.meta[n];
+      if (!id) throw new Error('pas dans l\'index (tonneau pas encore ouvert ?)');
+      const meta = await firstOk([/^https?:/.test(id) ? id : idx.base + id], readJson);
+      return pixelUp(await firstOk([meta.image], readImage));
+    },
+    preset: presetOf({ cx: 0.5, cy: 0.5, size: 0.84 }, { vx: 0.5, vy: 0.79, open: 178, round: 0 }, 6),
   },
 };
 // Pudgys « classiques » : peau bleue ou rose, sans chapeau ni accessoire, visage « Cute » (trouvés dans les métadonnées on-chain).
@@ -1835,52 +1926,64 @@ const PUDGY_CLASSICS = [
 const pudgyPreset = (kind) => state.models.find((m) => m.preset === kind) || { ...PUDGY[kind].preset, name: 'Preset ' + PUDGY[kind].label };
 
 async function fetchPudgy(kind, n) {
-  let last = null;
-  for (const url of PUDGY[kind].urls(n)) {
-    try {
-      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
-      const res = await fetch(url, { mode: 'cors', signal: ctl.signal }).finally(() => clearTimeout(timer));
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const blob = await res.blob();
-      if (!blob.type.startsWith('image/')) throw new Error('pas une image');
-      return new File([blob], `${PUDGY[kind].name} #${n}.png`, { type: blob.type });
-    } catch (err) { last = err; }
-  }
-  throw last || new Error('introuvable');
+  const blob = await PUDGY[kind].image(n);
+  const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : 'img';
+  return new File([blob], `${PUDGY[kind].name} #${n}.${ext}`, { type: blob.type });
 }
-function parseNums(txt, max) {
+function parseNums(txt, max, min = 0) {
   const out = [], bad = [];
   for (const t of txt.split(/[\s,;]+/).filter(Boolean)) {
     const n = Number(t.replace(/^#/, ''));
-    if (Number.isInteger(n) && n >= 0 && n <= max) { if (!out.includes(n)) out.push(n); } else bad.push(t);
+    if (Number.isInteger(n) && n >= min && n <= max) { if (!out.includes(n)) out.push(n); } else bad.push(t);
   }
   return { out, bad };
 }
 let pudgyBusy = 0;
 async function addPudgys(kind, nums) {
   const btn = $('#pg-add');
-  pudgyBusy++; btn.disabled = true; btn.textContent = 'Téléchargement…';
+  const busyLabel = () => { btn.textContent = pudgyBusy ? `Ajouter (${pudgyBusy} en cours…)` : 'Ajouter'; };
+  pudgyBusy += nums.length; busyLabel();
   const failed = [];
   const have = (n) => state.repls.some((r) => r.pudgy && r.pudgy.kind === kind && r.pudgy.n === n);
   const dl = nums.map((n) => {
     if (have(n)) { toast(`${PUDGY[kind].name} #${n} est déjà dans la liste.`); return null; }
-    return fetchPudgy(kind, n).catch((err) => { console.error(err); failed.push(n); return null; });
+    return fetchPudgy(kind, n).catch((err) => { console.error(err); failed.push({ n, why: err.message }); return null; });
   });
   // ajoutés dans l'ordre demandé, chacun dès qu'il est prêt
   for (let i = 0; i < nums.length; i++) {
     const file = await dl[i];
     if (file && !have(nums[i])) addRepls([file], { pudgy: { kind, n: nums[i] } });
+    pudgyBusy--; busyLabel();
   }
-  if (--pudgyBusy === 0) { btn.disabled = false; btn.textContent = 'Ajouter'; }
-  if (failed.length) toast(`Téléchargement impossible : ${PUDGY[kind].name} #${failed.join(', #')}. Vérifie la connexion.`);
+  if (failed.length) {
+    const unknown = failed.filter((f) => /HTTP 404|index/.test(f.why));
+    toast(`Téléchargement impossible : ${PUDGY[kind].name} #${failed.map((f) => f.n).join(', #')}. `
+      + (unknown.length === failed.length ? 'Ce numéro n\'existe pas (ou plus) dans la collection.' : 'Vérifie la connexion.'));
+  }
+}
+function syncPudgyKind() {
+  const k = PUDGY[$('#pg-kind').value];
+  $('#pg-num').placeholder = `N° ${k.min} à ${k.max} (ex. 12 ou 12, 340)`;
+  $('#pg-num').setAttribute('aria-label', `Numéro(s) ${k.name}`);
 }
 function submitPudgy() {
-  const kind = $('#pg-kind').value, { out, bad } = parseNums($('#pg-num').value, PUDGY[kind].max);
-  if (bad.length) { toast(`Numéro invalide : ${bad.join(', ')} (${PUDGY[kind].name} : 0 à ${PUDGY[kind].max}).`); return; }
+  const kind = $('#pg-kind').value, k = PUDGY[kind], { out, bad } = parseNums($('#pg-num').value, k.max, k.min);
+  if (bad.length) { toast(`Numéro invalide : ${bad.join(', ')} (${k.name} : ${k.min} à ${k.max}).`); return; }
   if (!out.length) { $('#pg-num').focus(); return; }
   $('#pg-num').value = '';
   addPudgys(kind, out);
 }
+// Menu des collections, regroupées par projet
+(() => {
+  const groups = new Map();
+  for (const [id, k] of Object.entries(PUDGY)) {
+    if (!groups.has(k.group)) groups.set(k.group, []);
+    groups.get(k.group).push(el('option', { value: id, text: k.label === k.name ? k.label : `${k.label} (${k.name})` }));
+  }
+  $('#pg-kind').replaceChildren(...[...groups].map(([label, opts]) => el('optgroup', { label }, opts)));
+  $('#pg-kind').addEventListener('change', syncPudgyKind);
+  syncPudgyKind();
+})();
 $('#pg-add').addEventListener('click', submitPudgy);
 $('#pg-num').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitPudgy(); } });
 $('#pg-classics').replaceChildren(...PUDGY_CLASSICS.map((c) => el('button', {
@@ -2166,7 +2269,7 @@ renderAll();
 
 /* ---------- Version affichée et vérification de mise à jour ---------- */
 // Mis à jour par nouvelle-version.py à chaque publication (avec sw.js et version.json).
-const APP_VERSION = { version: 'pfp-v13', built: '2026-11-20T18:03:28Z' };
+const APP_VERSION = { version: 'pfp-v14', built: '2026-11-25T12:27:50Z' };
 const fmtBuilt = (iso) => {
   const d = new Date(iso);
   return isNaN(d) ? iso : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' à ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });

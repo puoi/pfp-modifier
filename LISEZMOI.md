@@ -47,6 +47,11 @@ que la vérification est impossible.
 
 Pour publier : `python nouvelle-version.py` (numéro + date/heure dans sw.js, app.js et version.json), puis commit et push.
 
+Index des collections (dans `data/`, à refaire de temps en temps puis publier) :
+- `python index-smb3.py` : SMB Gen3, lu sur la blockchain Solana (RPC public). À relancer quand de nouveaux tonneaux sont ouverts.
+- `python index-mayc.py` : MAYC, via l'API NFT d'Alchemy (clé publique « demo »). L'API officielle MAYC est derrière Cloudflare.
+- `python index-smb2.py` : SMB Gen2, lu sur Arweave (collection figée, une fois suffit ; reprend là où il s'est arrêté). Un singe absent de l'index est quand même trouvé, en passant par le manifeste Arweave (plus lent).
+
 ## Utilisation
 
 1. **Les images** : les photos à modifier, puis les images de remplacement. Si une image de
@@ -68,12 +73,23 @@ Pour publier : `python nouvelle-version.py` (numéro + date/heure dans sw.js, ap
      Touche un modèle pour l'appliquer à une autre image, ou choisis-le dans « Préparer les nouvelles images » :
      toutes les images ajoutées ensuite sont découpées automatiquement (cadrage recalculé sur ce qui reste,
      donc ça suit un personnage légèrement décalé) ;
-   - **Pudgy Penguins** : choisis « Big Pudgy » (0 à 8887) ou « Lil Pudgy » (0 à 22221), tape un ou plusieurs
-     numéros (« 12, 340 ») puis « Ajouter » ; les boutons « Lil bleu », « Lil rose » et « Big classique » ajoutent
-     des penguins sans chapeau ni accessoire (les Big n'existent pas en bleu). Les images sont téléchargées (IPFS pour les Big, API Pudgy pour les Lil, connexion nécessaire).
-     Chaque collection a son **preset** (fond retiré, coupé au col, tête cadrée, forme Libre) : ajuste un Pudgy
-     puis « Enregistrer comme preset Big / Lil » dans « Modèles de découpe » ; il est appliqué aux autres Pudgys de
-     la même collection déjà dans la liste et aux prochains. « Preset d'origine » revient au réglage par défaut ;
+   - **Collections NFT** : choisis la collection, tape un ou plusieurs numéros (« 12, 340 ») puis « Ajouter »
+     (on peut en lancer d'autres pendant les téléchargements). Connexion nécessaire :
+
+     | Collection | Numéros | Source de l'image |
+     |---|---|---|
+     | Big Pudgy | 0 à 8887 | IPFS |
+     | Lil Pudgy | 0 à 22221 | API Pudgy Penguins |
+     | BAYC | 0 à 9999 | métadonnées IPFS, puis image IPFS |
+     | MAYC | 0 à 30007 (≈ 19 500 existent) | index `data/mayc/` (numéro → image IPFS) |
+     | SMB Gen2 | 1 à 5000 | index `data/smb2.json` (numéro → image Arweave) |
+     | SMB Gen3 | 1 à 15000 (≈ 8 300 révélés) | index `data/smb3.json` (numéro → métadonnées Irys), puis image |
+
+     Les SMB (pixel art) sont agrandis sans flou. Les boutons « Lil bleu », « Lil rose » et « Big classique » ajoutent
+     des penguins sans chapeau ni accessoire (les Big n'existent pas en bleu).
+     Chaque collection a son **preset** (fond retiré, coupé au col, tête cadrée, forme Libre) : ajuste une image
+     puis « Enregistrer comme preset … » dans « Modèles de découpe » ; il est appliqué aux autres images de
+     la même collection déjà dans la liste et aux prochaines. « Preset d'origine » revient au réglage par défaut ;
    - **bibliothèque** : chaque image posée sur une photo que tu enregistres y est gardée automatiquement, avec son
      recadrage, son détourage, sa gomme et ses réglages (une seule fois par image : un même fichier n'est jamais dupliqué,
      et le réajouter récupère ses réglages). Touche une image de la bibliothèque pour la réutiliser, touche son nom pour
